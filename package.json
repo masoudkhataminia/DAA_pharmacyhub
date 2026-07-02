@@ -1,0 +1,17 @@
+{
+  "name": "webster-pack-pro-v2",
+  "version": "2.3.5",
+  "description": "Professional Webster/Sachet pack management app. Persistent upload/save workflow, GP letter excludes OK medicines, and Special Orders/S8 module.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node scripts/smoke-test.js",
+    "check": "node --check server.js && node --check public/app.js && node scripts/smoke-test.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18"
+  }
+}

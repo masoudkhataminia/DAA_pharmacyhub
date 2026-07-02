@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Webster Pack Pro</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">W</div>
+      <div><strong>Webster Pack Pro</strong><span>Pack workflow control</span></div>
+    </div>
+    <button class="nav active" data-view="dashboard">Dashboard</button>
+    <button class="nav" data-view="import">Import Centre</button>
+    <button class="nav" data-view="patients">Patients</button>
+    <button class="nav" data-view="scripts">Script Requests</button>
+    <button class="nav" data-view="special">Special Orders / S8</button>
+    <button class="nav" data-view="doctor">Doctor Updates</button>
+    <button class="nav" data-view="settings">Settings & Audit</button>
+    <div class="side-note">Designed for staged pharmacy workflow: detect → review → confirm → act.</div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">Dashboard</h1>
+        <p id="pageSubtitle">Prioritise packing, dispensing, ordering and prescription requests by pickup risk.</p>
+      </div>
+      <div class="top-actions">
+        <button class="ghost" id="refreshBtn">Refresh</button>
+        <a class="ghost" href="/api/export/store">Backup JSON</a>
+      </div>
+    </header>
+
+    <section id="dashboard" class="view active">
+      <section class="panel quick-report-panel">
+        <div class="panel-head"><h2>Quick report update</h2><span>Pack Management Record text/CSV updates last pickup + cycle dates</span></div>
+        <form class="quick-report-upload" data-import="pack-record">
+          <input type="file" name="file" accept=".txt,.csv,.xlsx,.xls,.pdf" />
+          <button>Import Pack Report</button>
+          <small>Best: paste/export report as text or CSV. PDF is accepted only when text can be read.</small>
+        </form>
+      </section>
+      <div class="kpi-grid" id="kpis"></div>
+      <div class="two-col">
+        <section class="panel"><div class="panel-head"><h2>Packing due</h2><span>closest pickup first</span></div><div id="packingDue" class="queue"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Dispense due</h2><span>pack → dispense → pickup</span></div><div id="dispenseDue" class="queue"></div></section>
+      </div>
+      <div class="two-col">
+        <section class="panel"><div class="panel-head"><h2>Medicine ordering / patient supplied</h2><span>follow-up before pack</span></div><div id="orderingDue" class="queue"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Urgent / risk queue</h2><span>S8, overdue, doctor updates</span></div><div id="urgentQueue" class="queue"></div></section>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Special Orders / S8 due</h2><span>RDH, Hibiscus One, CP/NT and controlled medicines</span></div><div id="specialDueDashboard" class="queue"></div></section>
+    </section>
+
+    <section id="import" class="view">
+      <div class="steps">
+        <div class="step active"><b>1</b><span>Patient list</span><small>detect HIND</small></div>
+        <div class="step"><b>2</b><span>Medication report</span><small>link medicines</small></div>
+        <div class="step"><b>3</b><span>Scripts list</span><small>repeats/owing</small></div>
+        <div class="step"><b>4</b><span>Review</span><small>no silent delete</small></div>
+      </div>
+      <div class="three-col">
+        <form class="upload-card" data-import="patients"><h3>1. List of Patients</h3><p>Finds Webster/Sachet patients using HIND in name fields.</p><input type="file" name="file" accept=".xlsx,.xls,.csv" /><button>Import patients</button></form>
+        <form class="upload-card" data-import="medications"><h3>2. Patient Medication Report</h3><p>Links medicines, directions, S8 and patient-supplied hints.</p><input type="file" name="file" accept=".xlsx,.xls,.csv" /><button>Import medications</button></form>
+        <form class="upload-card" data-import="scripts"><h3>3. List of Scripts</h3><p>Calculates repeats left, owing, and GP request flags.</p><input type="file" name="file" accept=".xlsx,.xls,.csv" /><button>Import scripts</button></form>
+        <form class="upload-card" data-import="pack-record"><h3>4. Pack Management Record</h3><p>Updates last pickup dates and weekly/fortnightly/monthly cycles from myPak reports.</p><input type="file" name="file" accept=".txt,.csv,.xlsx,.xls,.pdf" /><button>Import pack report</button></form>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Import review</h2><span>new / updated / missing HIND patients</span></div><div id="importReview" class="table-wrap"></div></section>
+    </section>
+
+    <section id="patients" class="view">
+      <div class="toolbar"><input id="patientSearch" placeholder="Search patient..." /><select id="patientFilter"><option value="all">All active</option><option value="due">Due this week</option><option value="s8">S8 priority</option><option value="supplied">Patient supplied meds</option><option value="script">Script issue</option></select></div>
+      <section class="panel"><div class="panel-head"><h2>Patient master</h2><span>editable cycle, pickup, status and flags</span></div><div id="patientTable" class="table-wrap"></div></section>
+      <section class="panel details hidden" id="patientDetails"></section>
+    </section>
+
+    <section id="scripts" class="view">
+      <section class="panel script-workbench">
+        <div class="panel-head"><h2>Script request builder</h2><span>search patient → choose medicines → generate PDF</span></div>
+        <div class="script-search-row">
+          <input id="scriptPatientSearch" placeholder="Search patient name..." autocomplete="off" />
+          <button class="ghost" id="clearScriptSearch" type="button">Clear</button>
+        </div>
+        <div class="two-col wide-left">
+          <div>
+            <h3 class="subhead">Matching patients</h3>
+            <div id="scriptPatientResults" class="queue"></div>
+          </div>
+          <div>
+            <h3 class="subhead">Medicines for selected patient</h3>
+            <div id="requestBuilder" class="empty">Search and select a patient first.</div>
+          </div>
+        </div>
+      </section>
+      <section class="panel"><div class="panel-head"><h2>Recent script requests</h2><span>draft / sent / received</span></div><div id="recentRequests" class="table-wrap"></div></section>
+    </section>
+
+
+    <section id="special" class="view">
+      <div class="two-col wide-left">
+        <section class="panel">
+          <div class="panel-head"><h2>Special Orders / S8 queue</h2><span>due date = next pickup − order lead days</span></div>
+          <div class="toolbar"><input id="specialSearch" placeholder="Search patient, medicine, source..." /><select id="specialFilter"><option value="all">All open</option><option value="due">Due / overdue</option><option value="s8">S8 / controlled</option><option value="rdh">RDH</option><option value="hibiscus">Hibiscus One</option><option value="received">Received / complete</option></select></div>
+          <div id="specialOrdersList" class="queue"></div>
+          <div class="request-actions"><button id="specialTickDue" class="ghost">Tick due items</button><button id="specialUntick" class="ghost">Untick all</button></div>
+          <div class="special-request-box">
+            <input id="specialRecipient" placeholder="Recipient e.g. RDH / Hibiscus One / GP / patient" />
+            <select id="specialRequestMode"><option value="external">External supplier/prescriber request</option><option value="internal">Internal pharmacy checklist</option><option value="patient">Patient/carer reminder</option></select>
+            <textarea id="specialRequestNote" rows="2" placeholder="Optional note for the request PDF"></textarea>
+            <button id="generateSpecialPdf">Generate Special Order PDF</button>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Add / edit special order</h2><span>everything editable; dates in dd/mm/yyyy display</span></div>
+          <form id="specialOrderForm" class="form-grid"></form>
+        </section>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Recent special order requests</h2><span>PDF/HTML records</span></div><div id="recentSpecialRequests" class="table-wrap"></div></section>
+    </section>
+
+    <section id="doctor" class="view">
+      <div class="two-col wide-left">
+        <section class="panel"><div class="panel-head"><h2>Pending doctor updates</h2><span>never auto-apply medicine changes</span></div><div id="doctorList" class="queue"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Add doctor update</h2><span>manual safe entry</span></div><form id="doctorForm" class="form-grid"></form></section>
+      </div>
+    </section>
+
+    <section id="settings" class="view">
+      <section class="panel"><div class="panel-head"><h2>Workflow settings</h2><span>default lead days and alert windows</span></div><form id="settingsForm" class="settings-grid"></form></section>
+      <section class="panel"><div class="panel-head"><h2>Audit trail</h2><span>who/what/when style log</span></div><div id="auditLog" class="table-wrap"></div></section>
+    </section>
+  </main>
+
+  <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
