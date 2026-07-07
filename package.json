@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "mypak:patients": "node scripts/mypak-patient-list.js",
     "test": "node scripts/smoke-test.js",
-    "check": "node --check server.js && node --check public/app.js && node scripts/smoke-test.js"
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/mypak-patient-list.js && node scripts/smoke-test.js"
   },
   "dependencies": {},
   "engines": {
