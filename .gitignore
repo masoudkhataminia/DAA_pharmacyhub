@@ -8,3 +8,5 @@ build
 .replit
 .upm
 *.tsbuildinfo
+data/store.json
+data/mypak-*.json

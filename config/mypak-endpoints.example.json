@@ -1,0 +1,5 @@
+{
+  "patientList": { "method": "POST", "path": "/patients/list" },
+  "patientReportOptions": { "method": "GET", "path": "/patientreportoption" },
+  "patientGroup": { "method": "GET", "path": "/patientGroups/:groupId" }
+}

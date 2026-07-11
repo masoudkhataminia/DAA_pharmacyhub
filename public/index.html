@@ -68,6 +68,10 @@
         <form class="upload-card" data-import="scripts"><h3>3. List of Scripts</h3><p>Calculates repeats left, owing, and GP request flags.</p><input type="file" name="file" accept=".xlsx,.xls,.csv" /><button>Import scripts</button></form>
         <form class="upload-card" data-import="pack-record"><h3>4. Pack Management Record</h3><p>Updates last pickup dates and weekly/fortnightly/monthly cycles from myPak reports.</p><input type="file" name="file" accept=".txt,.csv,.xlsx,.xls,.pdf" /><button>Import pack report</button></form>
       </div>
+      <section class="panel" id="mypakPanel">
+        <div class="panel-head"><h2>MyPak sync</h2><span id="mypakConnection">Checking configuration…</span></div>
+        <div class="toolbar"><button id="mypakSyncBtn" type="button">Sync patients</button><span id="mypakSyncSummary">No sync information available.</span></div>
+      </section>
       <section class="panel"><div class="panel-head"><h2>Import review</h2><span>new / updated / missing HIND patients</span></div><div id="importReview" class="table-wrap"></div></section>
     </section>
 

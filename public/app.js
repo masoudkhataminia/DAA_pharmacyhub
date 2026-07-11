@@ -39,6 +39,24 @@ function renderImportReview(){
   const rows = STATE.importReviews || [];
   $('#importReview').innerHTML = rows.length ? `<table><thead><tr><th>Result</th><th>Patient</th><th>Action</th><th>Source</th><th>Time</th></tr></thead><tbody>${rows.slice(0,250).map(r=>`<tr><td>${badge(r.result, r.severity==='warning'?'warn':r.severity==='review'?'blue':'ok')}</td><td>${esc(r.fullName)}</td><td>${esc(r.action)}</td><td>${esc(r.source)}</td><td>${esc((r.at||'').slice(0,19).replace('T',' '))}</td></tr>`).join('')}</tbody></table>` : empty('No import review yet. Upload List of Patients first.');
 }
+async function refreshMyPakStatus(){
+  try {
+    const [connection, sync] = await Promise.all([api('/api/mypak/status'), api('/api/mypak/sync/status')]);
+    $('#mypakConnection').textContent = !connection.configured ? 'Not configured' : connection.authenticated ? 'Connected' : connection.lastError ? 'Authentication/request failed' : 'Configured';
+    const when = connection.lastSyncAt ? new Date(connection.lastSyncAt).toLocaleString() : 'never';
+    const progress = sync.running ? ` · ${sync.progress}% · page ${sync.currentPage}` : '';
+    const error = connection.lastError || sync.lastError;
+    $('#mypakSyncSummary').textContent = `Last sync: ${when} · Patients: ${connection.patientCount || 0}${progress}${error ? ` · Error: ${error}` : ''}`;
+    $('#mypakSyncBtn').disabled = !connection.configured || sync.running;
+  } catch (error) { $('#mypakConnection').textContent = 'Status unavailable'; $('#mypakSyncSummary').textContent = error.message; }
+}
+async function syncMyPakPatients(){
+  $('#mypakSyncBtn').disabled = true;
+  const poll = setInterval(refreshMyPakStatus, 750);
+  try { await api('/api/mypak/sync/patients', { method: 'POST' }); toast('MyPak patient sync complete.'); await loadState(); }
+  catch (error) { toast(error.message); }
+  finally { clearInterval(poll); await refreshMyPakStatus(); }
+}
 function filteredPatients(){
   const q = ($('#patientSearch')?.value||'').toLowerCase();
   const f = $('#patientFilter')?.value||'all';
@@ -273,6 +291,7 @@ async function loadState(){ STATE = await api('/api/state'); renderAll(); }
 
 $$('.nav').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
 $('#refreshBtn').addEventListener('click',loadState);
+$('#mypakSyncBtn').addEventListener('click',syncMyPakPatients);
 $$('form.upload-card').forEach(f=>f.addEventListener('submit',importForm));
 $$('form.quick-report-upload').forEach(f=>f.addEventListener('submit',importForm));
 $('#patientSearch').addEventListener('input',renderPatients); $('#patientFilter').addEventListener('change',renderPatients);
@@ -284,4 +303,4 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 window.openPatient=openPatient; window.editPatient=editPatient; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
-loadState().catch(e=>toast(e.message));
+loadState().then(refreshMyPakStatus).catch(e=>toast(e.message));

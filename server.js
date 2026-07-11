@@ -6,6 +6,9 @@ import path from 'path';
 import helmet from 'helmet';
 import PDFDocument from 'pdfkit';
 import crypto from 'crypto';
+import { MyPakClient } from './services/mypak/client.js';
+import { MyPakSyncService } from './services/mypak/sync.js';
+import { publicMyPakError } from './services/mypak/errors.js';
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
@@ -41,7 +44,10 @@ const DEFAULT_STORE = {
   packRecords: [],
   doctorUpdates: [],
   importReviews: [],
-  auditLog: []
+  auditLog: [],
+  mypakGroups: [],
+  mypakReportOptions: null,
+  mypakSync: { lastSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, status: 'never' }
 };
 
 function id() { return crypto.randomUUID(); }
@@ -113,6 +119,14 @@ function writeStore(store) { fs.writeFileSync(DATA_FILE, JSON.stringify(store, n
 function audit(store, action, details = {}) {
   store.auditLog.unshift({ id: id(), at: nowISO(), action, details });
   store.auditLog = store.auditLog.slice(0, 1500);
+}
+
+const mypakClient = new MyPakClient();
+const mypakSyncService = new MyPakSyncService({ client: mypakClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
+
+function sendMyPakError(res, error) {
+  const safe = publicMyPakError(error);
+  res.status(safe.status).json({ error: safe.error });
 }
 
 const FIELD_ALIASES = {
@@ -695,6 +709,28 @@ function importPatients(buffer, filename) {
 }
 
 app.get('/api/state', (_, res) => res.json(buildState(readStore())));
+app.get('/api/mypak/status', (_, res) => {
+  const sync = readStore().mypakSync || {};
+  res.json({ configured: mypakClient.isConfigured(), authenticated: Boolean(mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt), baseUrl: mypakClient.baseUrl, lastSuccessfulRequestAt: mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt || null, lastSyncAt: sync.lastSyncAt || null, lastError: sync.lastError || null, patientCount: sync.totalPatients || 0 });
+});
+app.post('/api/mypak/test', async (_, res) => { try { await mypakClient.reportOptions(); res.json({ ok: true, authenticated: true }); } catch (error) { sendMyPakError(res, error); } });
+app.get('/api/mypak/patients', async (req, res) => {
+  try {
+    const integers = (value, fallback) => { const n = Number(value); return Number.isInteger(n) ? n : fallback; };
+    const list = value => String(value || '').split(',').map(v => Number(v.trim())).filter(Number.isFinite);
+    const body = { pageIndex: Math.max(1, integers(req.query.pageIndex, 1)), pageSize: Math.min(200, Math.max(1, integers(req.query.pageSize, 50))), packingStatus: req.query.packingStatus ? list(req.query.packingStatus) : [0, 1, 3], sortField: String(req.query.sortField || 'LastName'), sortOrder: integers(req.query.sortOrder, 1) };
+    for (const key of ['textSearch']) if (req.query[key] !== undefined) body[key] = String(req.query[key]).slice(0, 200);
+    for (const key of ['patientGroupIds', 'patientIds']) if (req.query[key] !== undefined) body[key] = list(req.query[key]);
+    const result = await mypakClient.listPatients(body);
+    res.json({ data: Array.isArray(result.data) ? result.data : [], total: Number(result.total) || 0, pageIndex: body.pageIndex, pageSize: body.pageSize });
+  } catch (error) { sendMyPakError(res, error); }
+});
+app.get('/api/mypak/patients/:mypakPatientId', (req, res) => { const patient = readStore().patients.find(p => String(p.mypakPatientId) === String(req.params.mypakPatientId)); if (!patient) return res.status(404).json({ error: 'MyPak patient not found in local cache' }); res.json(patient); });
+app.get('/api/mypak/groups/:groupId', async (req, res) => { try { res.json(await mypakClient.patientGroup(req.params.groupId)); } catch (error) { sendMyPakError(res, error); } });
+app.get('/api/mypak/report-options', async (_, res) => { try { res.json(await mypakClient.reportOptions()); } catch (error) { sendMyPakError(res, error); } });
+app.post('/api/mypak/sync/patients', async (_, res) => { try { const result = await mypakSyncService.syncPatients(); res.status(result.started ? 200 : 409).json(result); } catch (error) { sendMyPakError(res, error); } });
+app.post('/api/mypak/sync/all', async (_, res) => { try { const result = await mypakSyncService.syncAll(); res.status(result.started ? 200 : 409).json(result); } catch (error) { sendMyPakError(res, error); } });
+app.get('/api/mypak/sync/status', (_, res) => res.json(mypakSyncService.getStatus()));
 app.get('/api/export/store', (_, res) => res.download(DATA_FILE, `webster-pack-backup-${toISODate(todayDate())}.json`));
 app.post('/api/reset', (req, res) => { const store = clone(DEFAULT_STORE); audit(store, 'Reset store', { reason: req.body?.reason || 'manual reset' }); writeStore(store); res.json({ ok: true }); });
 app.post('/api/settings', (req, res) => { const store = readStore(); store.settings = { ...store.settings, ...req.body }; audit(store, 'Updated settings', req.body); writeStore(store); res.json(buildState(store)); });
@@ -791,6 +827,8 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
 });
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => console.log(`Webster Pack Pro v2.3.5 running on http://localhost:${PORT}`));
+  const syncMinutes = Number(process.env.MYPAK_SYNC_INTERVAL_MINUTES || 0);
+  if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
 export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient };
