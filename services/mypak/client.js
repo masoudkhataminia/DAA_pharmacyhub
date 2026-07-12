@@ -43,6 +43,7 @@ export class MyPakClient {
     }
   }
   listPatients(body) { return this.request('patientList', { body }); }
+  listVirtualPillBalances(body) { return this.request('virtualPillBalances', { body }); }
   reportOptions() { return this.request('patientReportOptions'); }
   patientGroup(groupId) { return this.request('patientGroup', { params: { groupId } }); }
 }
