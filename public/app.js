@@ -15,7 +15,7 @@ function statusClass(p){
   return 'ok';
 }
 function patientBadges(p){
-  return [badge(p.calculatedStatus||'Unknown', statusClass(p)), p.s8Priority?badge('S8','danger'):'', p.patientSuppliedMeds?badge('Patient supplied','blue'):'', p.urgent?badge('Urgent','danger'):'', p.scriptRequestStatus && p.scriptRequestStatus!=='Not checked'?badge(p.scriptRequestStatus,'warn'):'' ].join('');
+  return [badge(p.calculatedStatus||'Unknown', statusClass(p)), p.mypakPatientId?badge('MyPak live','mint'):'', p.patientGroup?badge(p.patientGroup,'blue'):'', p.s8Priority?badge('S8','danger'):'', p.patientSuppliedMeds?badge('Patient supplied','blue'):'', p.urgent?badge('Urgent','danger'):'', p.scriptRequestStatus && p.scriptRequestStatus!=='Not checked'?badge(p.scriptRequestStatus,'warn'):'' ].join('');
 }
 function queueCard(p, mode='pickup'){
   const due = mode==='pack'?`Pack due: ${p.packDueDisplay||'—'}`:mode==='dispense'?`Dispense due: ${p.dispenseDueDisplay||'—'}`:mode==='order'?`Order due: ${p.orderDueDisplay||'—'}`:`Pickup: ${p.nextPickupDisplay||'—'}`;
@@ -81,7 +81,7 @@ function filteredPatients(){
   const q = ($('#patientSearch')?.value||'').toLowerCase();
   const f = $('#patientFilter')?.value||'all';
   return (STATE.patientsComputed||[]).filter(p=>{
-    if(q && !(`${p.fullName} ${p.phone} ${p.notes}`.toLowerCase().includes(q))) return false;
+    if(q && !(`${p.fullName} ${p.phone} ${p.notes} ${p.patientGroup} ${p.externalId} ${p.dispenseCode}`.toLowerCase().includes(q))) return false;
     if(f==='due' && !(p.daysToPickup!==null && p.daysToPickup<=7)) return false;
     if(f==='s8' && !p.s8Priority) return false;
     if(f==='supplied' && !p.patientSuppliedMeds) return false;
@@ -144,10 +144,24 @@ function norm(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').t
 async function buildRequestForPatient(id){
   const d = await api(`/api/patients/${id}/details`); selectedPatientId=id;
   const byMed = new Map();
+  const lowRepeatThreshold = Number(STATE.settings?.scriptLowRepeatThreshold ?? 1);
+  for (const m of d.medicationBalances || []) {
+    const key = norm(m.medication);
+    if (!key) continue;
+    const repeats = m.repeatsLeft ?? '';
+    const lowRepeats = repeats !== '' && Number.isFinite(Number(repeats)) && Number(repeats) <= lowRepeatThreshold;
+    const status = m.newScriptNeeded === true ? 'New script required' : lowRepeats ? 'Low repeats' : 'OK';
+    const balance = `MyPak balance ${patientValue(m.balanceQty)} · required/week ${patientValue(m.weeklyQty)}`;
+    byMed.set(key, { medicineName: m.medication, directions: m.direction || '', timing: balance, repeatsLeft: repeats, status, source: 'MyPak live balance', drugCode: m.drugCode || '' });
+  }
   for (const m of d.medications || []) {
     const key = norm(m.medicineName);
     if (!key) continue;
-    byMed.set(key, { medicineName: m.medicineName, directions: m.directions || '', timing: m.timing || '', repeatsLeft: '', status: 'Manual request', source: 'Medication list' });
+    const existing = byMed.get(key) || { medicineName: m.medicineName, repeatsLeft: '', status: 'Manual request', source: 'Medication list' };
+    existing.directions = m.directions || existing.directions || '';
+    existing.timing = m.timing || existing.timing || '';
+    existing.source = existing.source === 'MyPak live balance' ? 'MyPak + medication report' : 'Medication list';
+    byMed.set(key, existing);
   }
   for (const s of d.scripts || []) {
     const key = norm(s.drugDescription);
@@ -164,7 +178,7 @@ async function buildRequestForPatient(id){
   const actionableCount = items.filter(it => it.status !== 'OK').length;
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
   $('#requestBuilder').innerHTML = items.length ? `<div class="builder-head"><div><h3>${esc(d.patient.fullName)}</h3><p class="muted">Search patient → review medicines → only non-OK / low-repeat / owing items go to the GP letter. Saved data stays after refresh/restart until a newer file is imported.</p></div><button class="ghost" onclick="openPatient('${d.patient.id}')">Open profile</button></div>
-    <div class="request-summary"><b>${esc(actionableCount)}</b> medicines need action · <b>${esc(items.length-actionableCount)}</b> OK/sufficient-repeat medicines hidden from letter</div>
+    <div class="request-summary"><b>${esc(actionableCount)}</b> medicines need action · <b>${esc(items.length-actionableCount)}</b> OK/sufficient-repeat medicines hidden from letter · MyPak balances included</div>
     <div class="request-actions"><button class="ghost" onclick="tickAllRequestItems(true)">Tick action items</button><button class="ghost" onclick="tickAllRequestItems(false)">Untick all</button><label class="inline-check"><input id="showOkItems" type="checkbox" onchange="renderRequestItems()"> Show OK medicines</label></div>
     <div id="requestItems" class="request-list"></div>
     <textarea id="requestNote" rows="3" placeholder="Optional note to doctor / GP"></textarea>
@@ -179,7 +193,7 @@ function renderRequestItems(){
   const showOk = !!$('#showOkItems')?.checked;
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
   const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || it.status !== 'OK');
-  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${it.status!=='OK'?'checked':''} ${it.status==='OK'?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || it.timing || it.source || '')}</small></div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines have enough repeats / OK status. Nothing will be added to the GP letter.');
+  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${it.status!=='OK'?'checked':''} ${it.status==='OK'?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small>${it.source?`<em>${esc(it.source)}</em>`:''}</div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines have enough repeats / OK status. Nothing will be added to the GP letter.');
 }
 function tickAllRequestItems(on){
   $$('#requestItems input[type=checkbox]').forEach(x=>{ if(!x.disabled) x.checked=!!on; });
@@ -224,7 +238,14 @@ function renderSpecialOrders(){
   const orders=filteredSpecialOrders();
   $('#specialOrdersList').innerHTML = orders.length ? orders.map(o=>specialOrderCard(o)).join('') : empty('No special orders found. Add one manually or import/update patients first.');
   const patients=STATE.patientsComputed||[];
-  $('#specialOrderForm').innerHTML = `<div class="field full"><label>Patient</label><select name="patientId">${patients.map(p=>`<option value="${p.id}">${esc(p.fullName)}</option>`).join('')}</select></div>${fieldHTML('medicine','Medicine','text','')}${fieldHTML('strength','Strength','text','')}${fieldHTML('directions','Dose / directions','text','')}${fieldHTML('source','Source','select:RDH|Hibiscus One|CP|NT|Patient/Carer|Other','RDH')}${fieldHTML('category','Category','select:Special Order|S8|S8/Special|External Supply|Patient Supplied','Special Order')}${fieldHTML('lastPickupDate','Last pickup date','date','')}${fieldHTML('cycleDays','Cycle days','number',STATE.settings.defaultCycleDays)}${fieldHTML('orderLeadDays','Order lead days before next pickup','number',STATE.settings.defaultSpecialOrderLeadDays||14)}${fieldHTML('status','Status','select:Needs confirmation|Not ordered|Order due|Request generated|Ordered|Received|Packed|Dispensed|Complete|Cancelled','Not ordered')}${fieldHTML('notes','Notes','textarea','')}<div class="field full"><button>Add special order</button></div>`;
+  $('#specialOrderForm').innerHTML = `<div class="field full"><label>Patient</label><select name="patientId" id="specialPatientSelect">${patients.map(p=>`<option value="${p.id}">${esc(p.fullName)}${p.mypakPatientId?' · MyPak':''}</option>`).join('')}</select></div><div class="field"><label>Medicine</label><input name="medicine" list="specialMedicineOptions" placeholder="Select or type medicine"><datalist id="specialMedicineOptions"></datalist></div>${fieldHTML('strength','Strength','text','')}${fieldHTML('directions','Dose / directions','text','')}${fieldHTML('source','Source','select:RDH|Hibiscus One|CP|NT|Patient/Carer|Other','RDH')}${fieldHTML('category','Category','select:Special Order|S8|S8/Special|External Supply|Patient Supplied','Special Order')}${fieldHTML('lastPickupDate','Last pickup date','date','')}${fieldHTML('cycleDays','Cycle days','number',STATE.settings.defaultCycleDays)}${fieldHTML('orderLeadDays','Order lead days before next pickup','number',STATE.settings.defaultSpecialOrderLeadDays||14)}${fieldHTML('status','Status','select:Needs confirmation|Not ordered|Order due|Request generated|Ordered|Received|Packed|Dispensed|Complete|Cancelled','Not ordered')}${fieldHTML('notes','Notes','textarea','')}<div class="field full"><button>Add special order</button></div>`;
+  const patientSelect = $('#specialPatientSelect');
+  const updateMedicineOptions = () => {
+    const patient = patients.find(p => p.id === patientSelect?.value);
+    const balances = (STATE.mypakMedicationBalances || []).filter(m => String(m.patientId) === String(patient?.mypakPatientId));
+    $('#specialMedicineOptions').innerHTML = balances.map(m => `<option value="${esc(m.medication)}">${esc(m.drugCode || '')} · balance ${esc(patientValue(m.balanceQty))}</option>`).join('');
+  };
+  if (patientSelect) { patientSelect.addEventListener('change', updateMedicineOptions); updateMedicineOptions(); }
   $('#recentSpecialRequests').innerHTML = (STATE.specialOrderRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Recipient</th><th>Items</th><th>Status</th><th>PDF</th><th>Preview</th></tr></thead><tbody>${STATE.specialOrderRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.recipient)}</td><td>${esc((r.items||[]).length)}</td><td>${esc(r.status)}</td><td><a class="linkbtn" href="/api/special-order-letter/${r.id}/pdf" target="_blank">Open PDF</a></td><td><a class="linkbtn" href="/api/special-order-letter/${r.id}" target="_blank">HTML</a></td></tr>`).join('')}</tbody></table>` : empty('No special order request PDFs generated yet.');
 }
 async function addSpecialOrder(e){
