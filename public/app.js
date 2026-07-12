@@ -35,6 +35,23 @@ function renderDashboard(){
   $('#specialDueDashboard').innerHTML = (d.specialOrdersDue||[]).length ? d.specialOrdersDue.map(o=>specialOrderCard(o, true)).join('') : empty('No special orders due.');
 }
 function empty(text){ return `<div class="empty">${esc(text)}</div>`; }
+function patientAddress(p){
+  if(!p?.address) return '—';
+  if(typeof p.address === 'string') return p.address || '—';
+  return p.address.fullAddress || [p.address.street,p.address.suburb,p.address.state,p.address.postalCode].filter(Boolean).join(', ') || '—';
+}
+function patientValue(value){ return value === null || value === undefined || value === '' ? '—' : value; }
+function patientDemographics(p){
+  const fields = [
+    ['Date of birth', p.dob], ['Gender', p.gender], ['Address', patientAddress(p)], ['Phone', p.phone],
+    ['Patient group', p.patientGroup], ['Room', p.room], ['Facility / ward', p.facilityWard], ['Dispense code', p.dispenseCode],
+    ['Distribution', p.distribution], ['DAA funding', p.daaFunding], ['MyPak status', p.mypakPatientStatus], ['Packing status', p.mypakPackingStatus],
+    ['MyPak patient ID', p.mypakPatientId], ['External patient ID', p.mypakExternalPatientId || p.externalId],
+    ['Vision impaired', p.mypakMetadata?.visionImpaired ? 'Yes' : 'No'], ['30-day dispensing', p.mypakMetadata?.days30Dispensing ? 'Yes' : 'No'],
+    ['Last checked', p.mypakMetadata?.lastCheckedDate], ['Last MyPak sync', p.lastMyPakSyncAt ? new Date(p.lastMyPakSyncAt).toLocaleString() : '—']
+  ];
+  return `<h3>Patient information</h3><table><tbody>${fields.map(([label,value])=>`<tr><th>${esc(label)}</th><td>${esc(patientValue(value))}</td></tr>`).join('')}</tbody></table>`;
+}
 function renderImportReview(){
   const rows = STATE.importReviews || [];
   $('#importReview').innerHTML = rows.length ? `<table><thead><tr><th>Result</th><th>Patient</th><th>Action</th><th>Source</th><th>Time</th></tr></thead><tbody>${rows.slice(0,250).map(r=>`<tr><td>${badge(r.result, r.severity==='warning'?'warn':r.severity==='review'?'blue':'ok')}</td><td>${esc(r.fullName)}</td><td>${esc(r.action)}</td><td>${esc(r.source)}</td><td>${esc((r.at||'').slice(0,19).replace('T',' '))}</td></tr>`).join('')}</tbody></table>` : empty('No import review yet. Upload List of Patients first.');
@@ -78,7 +95,7 @@ async function openPatient(id){
   const d = await api(`/api/patients/${id}/details`);
   const p = d.patient;
   $('#patientDetails').classList.remove('hidden');
-  $('#patientDetails').innerHTML = `<div class="panel-head"><h2>${esc(p.fullName)}</h2><span>${esc(p.calculatedStatus)} · Risk ${esc(p.riskScore)}</span></div><div class="two-col"><div><h3>Workflow</h3><p>Last pickup: <b>${esc(p.lastPickupDisplay||'not set')}</b><br>Next pickup: <b>${esc(p.nextPickupDisplay||'not set')}</b><br>Pack due: <b>${esc(p.packDueDisplay||'—')}</b><br>Dispense due: <b>${esc(p.dispenseDueDisplay||'—')}</b><br>Order due: <b>${esc(p.orderDueDisplay||'—')}</b></p><div class="badges">${patientBadges(p)}</div><p>${esc(p.notes||'')}</p><button onclick="editPatient('${p.id}')">Edit workflow</button></div><div><h3>Medication list</h3>${d.medications.length?`<table><tbody>${d.medications.map(m=>`<tr><td>${esc(m.medicineName)}</td><td>${esc(m.directions)}</td></tr>`).join('')}</tbody></table>`:empty('No medications imported for this patient.')}</div></div><h3>Scripts</h3>${d.scripts.length?`<table><thead><tr><th>Drug</th><th>Repeats</th><th>Owing</th><th>Flag</th></tr></thead><tbody>${d.scripts.map(s=>`<tr><td>${esc(s.drugDescription)}</td><td>${esc(s.repeatsLeft)}</td><td>${s.owing?'Yes':'No'}</td><td>${badge(s.requestFlag, s.requestFlag==='OK'?'ok':'warn')}</td></tr>`).join('')}</tbody></table>`:empty('No scripts imported.')}`;
+  $('#patientDetails').innerHTML = `<div class="panel-head"><h2>${esc(p.fullName)}</h2><span>${esc(p.calculatedStatus)} · Risk ${esc(p.riskScore)}</span></div><div class="two-col"><div><h3>Workflow</h3><p>Last pickup: <b>${esc(p.lastPickupDisplay||'not set')}</b><br>Next pickup: <b>${esc(p.nextPickupDisplay||'not set')}</b><br>Pack due: <b>${esc(p.packDueDisplay||'—')}</b><br>Dispense due: <b>${esc(p.dispenseDueDisplay||'—')}</b><br>Order due: <b>${esc(p.orderDueDisplay||'—')}</b></p><div class="badges">${patientBadges(p)}</div><p>${esc(p.notes||'')}</p><button onclick="editPatient('${p.id}')">Edit workflow</button></div><div>${patientDemographics(p)}</div></div><h3>Medication list</h3>${d.medications.length?`<table><tbody>${d.medications.map(m=>`<tr><td>${esc(m.medicineName)}</td><td>${esc(m.directions)}</td></tr>`).join('')}</tbody></table>`:empty('No medications imported for this patient.')}<h3>Scripts</h3>${d.scripts.length?`<table><thead><tr><th>Drug</th><th>Repeats</th><th>Owing</th><th>Flag</th></tr></thead><tbody>${d.scripts.map(s=>`<tr><td>${esc(s.drugDescription)}</td><td>${esc(s.repeatsLeft)}</td><td>${s.owing?'Yes':'No'}</td><td>${badge(s.requestFlag, s.requestFlag==='OK'?'ok':'warn')}</td></tr>`).join('')}</tbody></table>`:empty('No scripts imported.')}`;
   showView('patients');
 }
 function editPatient(id){
