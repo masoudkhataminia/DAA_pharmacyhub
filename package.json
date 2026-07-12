@@ -5,7 +5,7 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --env-file=.env server.js",
     "dev": "node server.js",
     "mypak:patients": "node scripts/mypak-patient-list.js",
     "test": "node scripts/smoke-test.js && node --test tests/mypak.test.js",

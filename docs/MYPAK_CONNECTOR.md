@@ -7,6 +7,7 @@ The connector runs only in the Express backend. MyPak credentials are read from 
 Set `MYPAK_USERNAME` and `MYPAK_PASSWORD` in the private server environment for automatic login and token refresh. A temporary `MYPAK_AUTHORIZATION` token is also supported; when both are present, an expired token falls back to the configured credentials. `MYPAK_BASE_URL` defaults to `https://api.mypak.app/api`. Set `MYPAK_SYNC_INTERVAL_MINUTES` to a positive number to enable periodic patient and medication-balance sync; empty or `0` disables it.
 
 Credentials remain only in the server environment. The connector uses the confirmed MyPak `/token` login and `/token/refreshtoken` renewal endpoints and never returns credentials or tokens to the browser.
+The production `npm start` command loads the private `.env` file with Node's built-in `--env-file` support; `.env` remains excluded from Git.
 
 Never commit credentials, cookies, patient exports, `data/store.json`, or captured live responses.
 
