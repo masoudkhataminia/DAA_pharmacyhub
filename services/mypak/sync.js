@@ -30,13 +30,15 @@ export class MyPakSyncService {
         if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
       }
       const prescriptions = [];
-      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
-        const response = await this.client.listQuickDispense({ pageIndex, pageSize: this.pageSize, patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString(), sortField: 'LastName', sortOrder: 1 });
+      const prescriptionPageSize = 50;
+      const prescriptionMaxPages = Math.max(this.maxPages, 250);
+      for (let pageIndex = 1; pageIndex <= prescriptionMaxPages; pageIndex++) {
+        const response = await this.client.listQuickDispense({ pageIndex, pageSize: prescriptionPageSize, patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString(), sortField: 'LastName', sortOrder: 1 });
         const pageRows = Array.isArray(response.data) ? response.data : [];
         const prescriptionTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
         prescriptions.push(...pageRows);
         if (!pageRows.length || (prescriptionTotal !== null && prescriptions.length >= prescriptionTotal)) break;
-        if (pageIndex === this.maxPages) throw new Error('MyPak prescription pagination safety limit reached');
+        if (pageIndex === prescriptionMaxPages) throw new Error('MyPak prescription pagination safety limit reached');
       }
       const insufficientResponse = await this.client.listInsufficientPillBalances({ patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString() });
       const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
