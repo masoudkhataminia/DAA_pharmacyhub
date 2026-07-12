@@ -5,20 +5,21 @@ import { MyPakError } from './errors.js';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export class MyPakClient {
-  constructor({ env = process.env, fetchImpl = globalThis.fetch, auth = new MyPakAuth(env), timeoutMs = 15000, retries = 2 } = {}) {
-    this.env = env; this.fetchImpl = fetchImpl; this.auth = auth; this.timeoutMs = timeoutMs; this.retries = retries;
+  constructor({ env = process.env, fetchImpl = globalThis.fetch, auth, timeoutMs = 15000, retries = 2 } = {}) {
+    this.env = env; this.fetchImpl = fetchImpl; this.timeoutMs = timeoutMs; this.retries = retries;
     this.baseUrl = String(env.MYPAK_BASE_URL || 'https://api.mypak.app/api').replace(/\/$/, '');
+    this.auth = auth || new MyPakAuth({ env, fetchImpl, baseUrl: this.baseUrl });
     this.lastSuccessfulRequestAt = null;
   }
   isConfigured() { return this.auth.isConfigured(); }
   async request(name, { params, body } = {}) {
     const endpoint = MYPAK_ENDPOINTS[name];
     const path = endpointPath(name, params);
-    const authorization = await this.auth.authorization();
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
+        const authorization = await this.auth.authorization();
         const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
           method: endpoint.method,
           headers: { accept: 'application/json', 'content-type': 'application/json;charset=UTF-8', authorization },
@@ -29,6 +30,7 @@ export class MyPakClient {
         let json = {};
         try { json = raw ? JSON.parse(raw) : {}; } catch { throw new MyPakError('MyPak returned invalid JSON', { temporary: response.status >= 500 }); }
         if (!response.ok) {
+          if (response.status === 401 && attempt < this.retries && this.auth.canRefresh()) { await this.auth.refresh(); continue; }
           const temporary = response.status === 429 || response.status >= 500;
           throw new MyPakError(response.status === 401 || response.status === 403 ? 'MyPak authentication failed' : `MyPak request failed (${response.status})`, { status: response.status, temporary });
         }
