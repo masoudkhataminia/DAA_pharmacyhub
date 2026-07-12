@@ -29,9 +29,24 @@ export class MyPakSyncService {
         if (!pageRows.length || (balanceTotal !== null && balances.length >= balanceTotal)) break;
         if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
       }
+      const prescriptions = [];
+      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
+        const response = await this.client.listQuickDispense({ pageIndex, pageSize: this.pageSize, patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString(), sortField: 'LastName', sortOrder: 1 });
+        const pageRows = Array.isArray(response.data) ? response.data : [];
+        const prescriptionTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
+        prescriptions.push(...pageRows);
+        if (!pageRows.length || (prescriptionTotal !== null && prescriptions.length >= prescriptionTotal)) break;
+        if (pageIndex === this.maxPages) throw new Error('MyPak prescription pagination safety limit reached');
+      }
+      const insufficientResponse = await this.client.listInsufficientPillBalances({ patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString() });
+      const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
+      const doctorsResponse = await this.client.listDoctors();
+      const doctors = Array.isArray(doctorsResponse.data) ? doctorsResponse.data : [];
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
-      store.mypakMedicationBalances = balances;
-      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: balances.length, status: 'success' };
+      store.mypakMedicationBalances = [...new Map(balances.map(row => [String(row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`), row])).values()];
+      store.mypakPrescriptions = [...new Map(prescriptions.map(row => [String(row.prescriptionId), { ...row, isInsufficientPillBalance: insufficient.get(String(row.prescriptionId)) || false }])).values()];
+      store.mypakDoctors = [...new Map(doctors.map(row => [String(row.doctorId), row])).values()];
+      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, status: 'success' };
       this.writeStore(store); Object.assign(this.status, stats, { running: false, progress: 100, finishedAt: at });
       return { started: true, status: this.getStatus() };
     } catch (error) {

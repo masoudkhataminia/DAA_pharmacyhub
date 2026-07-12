@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260713-premium" />
+  <link rel="stylesheet" href="/styles.css?v=20260713-workflow" />
 </head>
 <body>
   <aside class="sidebar">
@@ -13,7 +13,6 @@
       <div><strong>DAA Pharmacy Hub</strong><span>MyPak-connected workflow</span></div>
     </div>
     <button class="nav active" data-view="dashboard">Dashboard</button>
-    <button class="nav" data-view="import">Import Centre</button>
     <button class="nav" data-view="patients">Patients</button>
     <button class="nav" data-view="scripts">Script Requests</button>
     <button class="nav" data-view="special">Special Orders / S8</button>
@@ -35,14 +34,6 @@
     </header>
 
     <section id="dashboard" class="view active">
-      <section class="panel quick-report-panel">
-        <div class="panel-head"><h2>Quick report update</h2><span>Pack Management Record text/CSV updates last pickup + cycle dates</span></div>
-        <form class="quick-report-upload" data-import="pack-record">
-          <input type="file" name="file" accept=".txt,.csv,.xlsx,.xls,.pdf" />
-          <button>Import Pack Report</button>
-          <small>Best: paste/export report as text or CSV. PDF is accepted only when text can be read.</small>
-        </form>
-      </section>
       <div class="kpi-grid" id="kpis"></div>
       <div class="two-col">
         <section class="panel"><div class="panel-head"><h2>Packing due</h2><span>closest pickup first</span></div><div id="packingDue" class="queue"></div></section>
@@ -55,7 +46,7 @@
       <section class="panel"><div class="panel-head"><h2>Special Orders / S8 due</h2><span>RDH, Hibiscus One, CP/NT and controlled medicines</span></div><div id="specialDueDashboard" class="queue"></div></section>
     </section>
 
-    <section id="import" class="view">
+    <section id="import" class="view hidden">
       <div class="steps">
         <div class="step active"><b>1</b><span>Patient list</span><small>detect HIND</small></div>
         <div class="step"><b>2</b><span>Medication report</span><small>link medicines</small></div>
@@ -108,6 +99,7 @@
         <section class="panel">
           <div class="panel-head"><h2>Special Orders / S8 queue</h2><span>due date = next pickup − order lead days</span></div>
           <div class="toolbar"><input id="specialSearch" placeholder="Search patient, medicine, source..." /><select id="specialFilter"><option value="all">All open</option><option value="due">Due / overdue</option><option value="s8">S8 / controlled</option><option value="rdh">RDH</option><option value="hibiscus">Hibiscus One</option><option value="received">Received / complete</option></select></div>
+          <h3 class="subhead">Live S8 medicines from MyPak</h3><div id="liveS8List" class="queue"></div>
           <div id="specialOrdersList" class="queue"></div>
           <div class="request-actions"><button id="specialTickDue" class="ghost">Tick due items</button><button id="specialUntick" class="ghost">Untick all</button></div>
           <div class="special-request-box">
@@ -133,6 +125,8 @@
     </section>
 
     <section id="settings" class="view">
+      <section class="panel" id="mypakPanelSettings"><div class="panel-head"><h2>Data & MyPak sync</h2><span>Read-only MyPak connection</span></div><div class="toolbar"><button id="mypakSyncBtnSettings" type="button">Sync now</button><span>Automatic sync: every 15 minutes, 08:00–18:00.</span></div><div class="three-col settings-imports"><form class="upload-card" data-import="patients"><h3>Patients</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="upload-card" data-import="medications"><h3>Medications</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="upload-card" data-import="scripts"><h3>Scripts</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></section>
+      <section class="panel"><div class="panel-head"><h2>Prescription request schedule</h2><span>Draft queue only until email service is configured</span></div><form id="automationForm" class="form-grid"><div class="field"><label>Schedule</label><select name="frequency"><option value="manual">Manual only</option><option value="interval">Every N days</option><option value="date">Specific date</option></select></div><div class="field"><label>Every N days</label><input name="intervalDays" type="number" min="1" value="14"></div><div class="field"><label>Next date</label><input name="nextRunDate" type="date"></div><div class="field"><label>Recipient email(s)</label><input name="recipients"></div><div class="field full"><label>Subject template</label><input name="subjectTemplate"></div><div class="field full"><label>Message template</label><textarea name="bodyTemplate" rows="6"></textarea></div><div class="field full"><label><input name="enabled" type="checkbox"> Enable draft schedule</label><button>Save schedule & template</button></div></form></section>
       <section class="panel"><div class="panel-head"><h2>Workflow settings</h2><span>default lead days and alert windows</span></div><form id="settingsForm" class="settings-grid"></form></section>
       <section class="panel"><div class="panel-head"><h2>Audit trail</h2><span>who/what/when style log</span></div><div id="auditLog" class="table-wrap"></div></section>
     </section>
@@ -140,6 +134,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260713-premium-mypak"></script>
+  <script src="/app.js?v=20260713-workflow"></script>
 </body>
 </html>

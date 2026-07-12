@@ -48,6 +48,19 @@ const DEFAULT_STORE = {
   mypakGroups: [],
   mypakReportOptions: null,
   mypakMedicationBalances: [],
+  mypakPrescriptions: [],
+  mypakDoctors: [],
+  dispenseWorkflow: {},
+  prescriptionWorkflow: {},
+  prescriptionAutomation: {
+    enabled: false,
+    recipients: '',
+    frequency: 'manual',
+    intervalDays: 14,
+    nextRunDate: '',
+    subjectTemplate: 'Prescription request – {{patientName}}',
+    bodyTemplate: 'Dear Dr,\n\nPlease review and provide prescriptions for the selected medicines for {{patientName}}.\n\nKind regards,\nHibiscus Pharmacy'
+  },
   mypakSync: { lastSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, status: 'never' }
 };
 
@@ -312,16 +325,33 @@ function dashboard(store) {
       s8Priority: pts.filter(p => p.s8Priority).length,
       openDoctorUpdates: openDoctor.length,
       scriptIssues: pendingScripts.length,
-      specialOrdersDue: specialDue.length
+      specialOrdersDue: specialDue.length,
+      needsDispense: dispenseQueue(store).filter(x => x.status === 'needs_dispense').length
     },
     packingDue: sortQueue(pts, 'daysToPack', 'packStatus', /packed|ready|complete/i).slice(0, 80),
-    dispenseDue: sortQueue(pts, 'daysToDispense', 'dispenseStatus', /dispensed|complete/i).slice(0, 80),
+    dispenseDue: dispenseQueue(store).slice(0, 80),
     orderingDue: sortQueue(pts.filter(p => p.patientSuppliedMeds || !/received|not needed|complete/i.test(p.medicineOrderStatus || '')), 'daysToOrder', 'medicineOrderStatus', /received|not needed|complete/i).slice(0, 80),
     urgent: pts.filter(p => p.urgent || p.calculatedStatus === 'Overdue' || p.calculatedStatus === 'Due today' || p.s8Priority).sort((a,b)=>b.riskScore-a.riskScore).slice(0,80),
     doctorUpdates: openDoctor.slice(0, 80),
     scriptIssues: pendingScripts.slice(0, 80),
     specialOrdersDue: specialDue.slice(0, 80)
   };
+}
+
+function dispenseQueue(store) {
+  const patients = new Map((store.patients || []).map(p => [String(p.mypakPatientId), p]));
+  const grouped = new Map();
+  for (const med of store.mypakPrescriptions || []) {
+    const balance = Number(med.balanceQty);
+    if (!(balance < 0 || med.isInsufficientPillBalance)) continue;
+    const patientId = String(med.patientId ?? '');
+    const patient = patients.get(patientId);
+    const key = patientId || normalizeName(`${med.firstName || ''} ${med.lastName || ''}`);
+    if (!grouped.has(key)) grouped.set(key, { key, patientId: patient?.id || '', mypakPatientId: patientId, fullName: patient?.fullName || cleanText(`${med.firstName || ''} ${med.lastName || ''}`), patientGroup: med.patientGroupName || patient?.patientGroup || '', medications: [], worstBalance: 0 });
+    const item = grouped.get(key); item.medications.push(med); item.worstBalance = Math.min(item.worstBalance, Number.isFinite(balance) ? balance : 0);
+  }
+  return [...grouped.values()].map(item => ({ ...item, status: store.dispenseWorkflow?.[item.key]?.status || 'needs_dispense', updatedAt: store.dispenseWorkflow?.[item.key]?.updatedAt || null }))
+    .sort((a,b) => ({needs_dispense:0,dispensed:1,confirmed:2}[a.status] - {needs_dispense:0,dispensed:1,confirmed:2}[b.status]) || a.worstBalance-b.worstBalance || a.fullName.localeCompare(b.fullName));
 }
 function buildMedication(wrap) {
   const r = wrap.row; const name = makePatientName(r);
@@ -668,7 +698,7 @@ function specialOrderLetterHtml(r) {
 }
 
 function buildState(store) {
-  return { ...store, patientsComputed: activeComputed(store).sort((a,b)=>(a.daysToPickup ?? 9999)-(b.daysToPickup ?? 9999)||a.fullName.localeCompare(b.fullName)), specialOrdersComputed: specialOrdersComputed(store), dashboard: dashboard(store) };
+  return { ...store, patientsComputed: activeComputed(store).sort((a,b)=>(a.daysToPickup ?? 9999)-(b.daysToPickup ?? 9999)||a.fullName.localeCompare(b.fullName)), dispenseQueue: dispenseQueue(store), specialOrdersComputed: specialOrdersComputed(store), dashboard: dashboard(store) };
 }
 function importPatients(buffer, filename) {
   const store = readStore(); const rows = workbookRows(buffer);
@@ -727,11 +757,13 @@ app.get('/api/mypak/patients', async (req, res) => {
   } catch (error) { sendMyPakError(res, error); }
 });
 app.get('/api/mypak/patients/:mypakPatientId', (req, res) => { const patient = readStore().patients.find(p => String(p.mypakPatientId) === String(req.params.mypakPatientId)); if (!patient) return res.status(404).json({ error: 'MyPak patient not found in local cache' }); res.json(patient); });
+app.get('/api/mypak/patients/:mypakPatientId/live', async (req, res) => { try { res.json(await mypakClient.patientDetail(req.params.mypakPatientId)); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/groups/:groupId', async (req, res) => { try { res.json(await mypakClient.patientGroup(req.params.groupId)); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/report-options', async (_, res) => { try { res.json(await mypakClient.reportOptions()); } catch (error) { sendMyPakError(res, error); } });
 app.post('/api/mypak/sync/patients', async (_, res) => { try { const result = await mypakSyncService.syncPatients(); res.status(result.started ? 200 : 409).json(result); } catch (error) { sendMyPakError(res, error); } });
 app.post('/api/mypak/sync/all', async (_, res) => { try { const result = await mypakSyncService.syncAll(); res.status(result.started ? 200 : 409).json(result); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/sync/status', (_, res) => res.json(mypakSyncService.getStatus()));
+app.patch('/api/dispense-workflow/:key', (req, res) => { const allowed = ['needs_dispense','dispensed','confirmed']; const status = cleanText(req.body.status); if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid dispense status' }); const store = readStore(); store.dispenseWorkflow[req.params.key] = { status, updatedAt: nowISO() }; audit(store, 'Updated dispense workflow', { key: req.params.key, status }); writeStore(store); res.json(store.dispenseWorkflow[req.params.key]); });
 app.get('/api/export/store', (_, res) => res.download(DATA_FILE, `webster-pack-backup-${toISODate(todayDate())}.json`));
 app.post('/api/reset', (req, res) => { const store = clone(DEFAULT_STORE); audit(store, 'Reset store', { reason: req.body?.reason || 'manual reset' }); writeStore(store); res.json({ ok: true }); });
 app.post('/api/settings', (req, res) => { const store = readStore(); store.settings = { ...store.settings, ...req.body }; audit(store, 'Updated settings', req.body); writeStore(store); res.json(buildState(store)); });
@@ -747,7 +779,7 @@ app.get('/api/special-order-letter/:requestId', (req, res) => { const store = re
 app.get('/api/special-order-letter/:requestId/pdf', (req, res) => { const store = readStore(); const r = store.specialOrderRequests.find(x=>x.id===req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.setHeader('Content-Type','application/pdf'); res.setHeader('Content-Disposition', `inline; filename="special-order-request-${r.date}.pdf"`); const doc = new PDFDocument({ margin: 36, size: 'A4' }); doc.pipe(res); doc.font('Helvetica-Bold').fontSize(14).text('Hibiscus Day and Night Pharmacy'); doc.font('Helvetica').fontSize(10).text('Hibiscus Shopping Centre, 4/8 Leanyer Dr, Leanyer NT 0812'); doc.text('(08) 8945 5955'); doc.moveDown(); doc.font('Helvetica-Bold').fontSize(16).text(r.mode === 'internal' ? 'Special Order Checklist' : 'Special Medication / Prescription Request'); doc.font('Helvetica').fontSize(10).text(`Date: ${dateDisplay(r.date)}`); doc.text(`Recipient: ${r.recipient || 'External supplier / prescriber'}`); doc.moveDown(); doc.text('Please review/provide the following medicines required for upcoming Webster/sachet packs where appropriate.'); doc.moveDown(); const startX=doc.x, widths=[95,130,70,85,65,65]; function row(cols, header=false){ const y=doc.y; const h=38; doc.font(header?'Helvetica-Bold':'Helvetica').fontSize(8); let x=startX; cols.forEach((c,i)=>{ doc.rect(x,y,widths[i],h).stroke(); doc.text(String(c??''),x+3,y+4,{width:widths[i]-6,height:h-8}); x+=widths[i]; }); doc.y=y+h; if(doc.y>735) doc.addPage(); } row(['Patient','Medicine','Strength','Source','Next pickup','Order due'], true); (r.items||[]).forEach(i=>row([i.patientFullName, i.medicine, i.strength||'', i.source||'', i.nextPickupDisplay||'', i.orderDueDisplay||''])); if(r.note){ doc.moveDown(); doc.font('Helvetica-Bold').text('Note:'); doc.font('Helvetica').text(r.note); } doc.moveDown(); doc.text('Kind Regards,'); doc.text('Hibiscus Pharmacy'); doc.end(); });
 
 app.patch('/api/patients/:id', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const before = clone(p); const allowed = ['fullName','firstName','lastName','dob','phone','address','cycleDays','lastPickupDate','packLeadDays','dispenseLeadDays','orderLeadDays','packStatus','dispenseStatus','medicineOrderStatus','scriptRequestStatus','patientSuppliedMeds','s8Priority','urgent','notes','active','packType']; for (const k of allowed) if (k in req.body) p[k] = req.body[k]; p.lastPickupDate = dateOrBlank(p.lastPickupDate); p.matchKey = matchKeyFor(p); p.updatedAt = nowISO(); audit(store, 'Updated patient', { patient: p.fullName, before, after: p }); writeStore(store); res.json(computePatient(p, store.settings)); });
-app.get('/api/patients/:id/details', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const key = normalizeName(p.fullName); res.json({ patient: computePatient(p, store.settings), medications: store.medications.filter(m => m.patientNameKey === key), medicationBalances: (store.mypakMedicationBalances || []).filter(m => String(m.patientId) === String(p.mypakPatientId)), scripts: store.scripts.filter(s => s.patientNameKey === key), doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id), scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id) }); });
+app.get('/api/patients/:id/details', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const key = normalizeName(p.fullName); res.json({ patient: computePatient(p, store.settings), medications: store.medications.filter(m => m.patientNameKey === key), medicationBalances: (store.mypakMedicationBalances || []).filter(m => String(m.patientId) === String(p.mypakPatientId)), prescriptions: (store.mypakPrescriptions || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(m => ({ ...m, requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })), doctors: store.mypakDoctors || [], scripts: store.scripts.filter(s => s.patientNameKey === key), doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id), scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id) }); });
 app.post('/api/script-request', (req, res) => {
   const store = readStore();
   const p = store.patients.find(x => x.id === req.body.patientId);
@@ -760,13 +792,15 @@ app.post('/api/script-request', (req, res) => {
     .filter(i => i.medicineName || i.drugDescription)
     .filter(i => !/^ok$/i.test(i.status));
   if (!selected.length) return res.status(400).json({ error: 'No actionable medicines selected. OK / sufficient-repeat items are excluded from GP letters.' });
-  const request = { id: id(), patientId: p.id, patientFullName: p.fullName, date: toISODate(todayDate()), status: 'Draft', recipient: req.body.recipient || 'GP / Prescriber', items: selected, note: cleanText(req.body.note), createdAt: nowISO() };
+  const request = { id: id(), patientId: p.id, patientFullName: p.fullName, date: toISODate(todayDate()), status: 'Draft', recipient: cleanText(req.body.recipient || 'GP / Prescriber'), doctorId: cleanText(req.body.doctorId), items: selected, note: cleanText(req.body.note), createdAt: nowISO() };
   store.scriptRequests.unshift(request);
+  for (const item of selected) if (item.prescriptionId) store.prescriptionWorkflow[String(item.prescriptionId)] = { status: 'requested', requestId: request.id, updatedAt: nowISO() };
   p.scriptRequestStatus = 'Draft request created';
   audit(store, 'Created script request', { patient: p.fullName, itemCount: selected.length, excludedOK: selectedRaw.length - selected.length });
   writeStore(store);
   res.json(request);
 });
+app.post('/api/prescription-automation', (req, res) => { const store = readStore(); const current = store.prescriptionAutomation || DEFAULT_STORE.prescriptionAutomation; store.prescriptionAutomation = { ...current, enabled: Boolean(req.body.enabled), recipients: cleanText(req.body.recipients), frequency: ['manual','interval','date'].includes(req.body.frequency) ? req.body.frequency : 'manual', intervalDays: Math.max(1, num(req.body.intervalDays, 14)), nextRunDate: dateOrBlank(req.body.nextRunDate), subjectTemplate: String(req.body.subjectTemplate || current.subjectTemplate).slice(0,500), bodyTemplate: String(req.body.bodyTemplate || current.bodyTemplate).slice(0,5000) }; audit(store, 'Updated prescription request schedule', { enabled: store.prescriptionAutomation.enabled, frequency: store.prescriptionAutomation.frequency, nextRunDate: store.prescriptionAutomation.nextRunDate }); writeStore(store); res.json(store.prescriptionAutomation); });
 app.patch('/api/script-request/:id', (req, res) => { const store = readStore(); const r = store.scriptRequests.find(x => x.id === req.params.id); if (!r) return res.status(404).json({ error: 'Request not found' }); Object.assign(r, req.body, { updatedAt: nowISO() }); audit(store, 'Updated script request', { patient: r.patientFullName, status: r.status }); writeStore(store); res.json(r); });
 app.post('/api/doctor-updates', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.body.patientId); if (!p) return res.status(404).json({ error: 'Patient not found' }); const update = { id: id(), patientId: p.id, patientFullName: p.fullName, receivedDate: dateOrBlank(req.body.receivedDate) || toISODate(todayDate()), source: cleanText(req.body.source || 'Doctor letter'), changeType: cleanText(req.body.changeType || 'Medication change'), medicine: cleanText(req.body.medicine), oldDirection: cleanText(req.body.oldDirection), newDirection: cleanText(req.body.newDirection), effectiveFrom: cleanText(req.body.effectiveFrom || 'Needs review'), status: 'Pending pharmacist review', risk: cleanText(req.body.risk || 'Routine'), notes: cleanText(req.body.notes), createdAt: nowISO() }; store.doctorUpdates.unshift(update); p.urgent = p.urgent || /urgent|current|immediate/i.test(update.risk + ' ' + update.effectiveFrom); audit(store, 'Added doctor medication update', { patient: p.fullName, medicine: update.medicine, changeType: update.changeType }); writeStore(store); res.json(update); });
 app.patch('/api/doctor-updates/:id', (req, res) => { const store = readStore(); const u = store.doctorUpdates.find(x => x.id === req.params.id); if (!u) return res.status(404).json({ error: 'Doctor update not found' }); Object.assign(u, req.body, { updatedAt: nowISO() }); audit(store, 'Updated doctor update', { patient: u.patientFullName, status: u.status }); writeStore(store); res.json(u); });

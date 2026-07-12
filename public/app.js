@@ -18,13 +18,16 @@ function patientBadges(p){
   return [badge(p.calculatedStatus||'Unknown', statusClass(p)), p.mypakPatientId?badge('MyPak live','mint'):'', p.patientGroup?badge(p.patientGroup,'blue'):'', p.s8Priority?badge('S8','danger'):'', p.patientSuppliedMeds?badge('Patient supplied','blue'):'', p.urgent?badge('Urgent','danger'):'', p.scriptRequestStatus && p.scriptRequestStatus!=='Not checked'?badge(p.scriptRequestStatus,'warn'):'' ].join('');
 }
 function queueCard(p, mode='pickup'){
+  if(mode==='dispense' && p.medications) return `<div class="queue-card dispense-card"><div><h3>${esc(p.fullName)}</h3><p><b>${p.medications.length}</b> medicines need dispensing · lowest balance <b>${esc(p.worstBalance)}</b></p><div class="badges">${badge(p.status.replaceAll('_',' '),p.status==='confirmed'?'ok':p.status==='dispensed'?'blue':'danger')} ${p.patientGroup?badge(p.patientGroup,'mint'):''}</div></div><div class="card-actions"><button class="ghost" onclick="openDispensePatient('${p.key}','${p.patientId}')">Balances</button>${p.status==='needs_dispense'?`<button onclick="setDispenseStatus('${p.key}','dispensed')">Dispensed</button>`:p.status==='dispensed'?`<button onclick="setDispenseStatus('${p.key}','confirmed')">Confirm ✓</button>`:`<button class="ghost" onclick="setDispenseStatus('${p.key}','needs_dispense')">Reopen</button>`}</div></div>`;
   const due = mode==='pack'?`Pack due: ${p.packDueDisplay||'—'}`:mode==='dispense'?`Dispense due: ${p.dispenseDueDisplay||'—'}`:mode==='order'?`Order due: ${p.orderDueDisplay||'—'}`:`Pickup: ${p.nextPickupDisplay||'—'}`;
   return `<div class="queue-card"><div><h3>${esc(p.fullName)}</h3><p>${due} · cycle ${esc(p.cycleDays)} days · pickup ${esc(p.nextPickupDisplay||'not set')}</p><div class="badges">${patientBadges(p)}</div></div><button class="ghost" onclick="openPatient('${p.id}')">Open</button></div>`;
 }
 function renderKPIs(k){
-  const labels = [['activePatients','Active'],['overdue','Overdue'],['dueThisWeek','Due this week'],['patientSupplied','Patient supplied'],['s8Priority','S8'],['openDoctorUpdates','Doctor updates'],['scriptIssues','Script issues'],['specialOrdersDue','Special orders due']];
+  const labels = [['activePatients','Active'],['needsDispense','Needs dispense'],['overdue','Overdue'],['dueThisWeek','Due this week'],['s8Priority','S8'],['openDoctorUpdates','Doctor updates'],['scriptIssues','Script issues'],['specialOrdersDue','Special orders due']];
   $('#kpis').innerHTML = labels.map(([key,label])=>`<div class="kpi"><span>${label}</span><b>${k[key]??0}</b></div>`).join('');
 }
+async function setDispenseStatus(key,status){ await api(`/api/dispense-workflow/${encodeURIComponent(key)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}); toast(status==='confirmed'?'Dispense confirmed.':'Dispense workflow updated.'); await loadState(); }
+async function openDispensePatient(key,patientId){ if(patientId) return openPatient(patientId); const item=(STATE.dispenseQueue||[]).find(x=>x.key===key); if(item) toast(`${item.fullName}: ${item.medications.length} medicines need dispensing.`); }
 function renderDashboard(){
   const d = STATE.dashboard;
   renderKPIs(d.kpis);
@@ -80,6 +83,7 @@ async function syncMyPakPatients(){
 function filteredPatients(){
   const q = ($('#patientSearch')?.value||'').toLowerCase();
   const f = $('#patientFilter')?.value||'all';
+  if(q.trim().length < 2) return [];
   return (STATE.patientsComputed||[]).filter(p=>{
     if(q && !(`${p.fullName} ${p.phone} ${p.notes} ${p.patientGroup} ${p.externalId} ${p.dispenseCode}`.toLowerCase().includes(q))) return false;
     if(f==='due' && !(p.daysToPickup!==null && p.daysToPickup<=7)) return false;
@@ -87,11 +91,11 @@ function filteredPatients(){
     if(f==='supplied' && !p.patientSuppliedMeds) return false;
     if(f==='script' && !/draft|sent|required|owing|low|needed/i.test(p.scriptRequestStatus||'')) return false;
     return true;
-  });
+  }).slice(0,50);
 }
 function renderPatients(){
   const pts = filteredPatients();
-  $('#patientTable').innerHTML = pts.length ? `<table><thead><tr><th>Name</th><th>Cycle</th><th>Last pickup</th><th>Next pickup</th><th>Pack</th><th>Dispense</th><th>Flags</th><th></th></tr></thead><tbody>${pts.map(p=>`<tr><td><button class="linkbtn" onclick="openPatient('${p.id}')">${esc(p.fullName)}</button><br><small>${esc(p.phone||'')}</small></td><td>${esc(p.cycleDays)} days</td><td>${esc(p.lastPickupDisplay||'—')}</td><td>${esc(p.nextPickupDisplay||'—')}<br><small>${esc(p.calculatedStatus)}</small></td><td>${esc(p.packStatus)}</td><td>${esc(p.dispenseStatus)}</td><td><div class="badges">${patientBadges(p)}</div></td><td><button class="ghost" onclick="editPatient('${p.id}')">Edit</button></td></tr>`).join('')}</tbody></table>` : empty('No matching patients. Import List of Patients first.');
+  $('#patientTable').innerHTML = pts.length ? `<table><thead><tr><th>Name</th><th>Cycle</th><th>Last pickup</th><th>Next pickup</th><th>Pack</th><th>Dispense</th><th>Flags</th><th></th></tr></thead><tbody>${pts.map(p=>`<tr><td><button class="linkbtn" onclick="openPatient('${p.id}')">${esc(p.fullName)}</button><br><small>${esc(p.phone||'')}</small></td><td>${esc(p.cycleDays)} days</td><td>${esc(p.lastPickupDisplay||'—')}</td><td>${esc(p.nextPickupDisplay||'—')}<br><small>${esc(p.calculatedStatus)}</small></td><td>${esc(p.packStatus)}</td><td>${esc(p.dispenseStatus)}</td><td><div class="badges">${patientBadges(p)}</div></td><td><button class="ghost" onclick="editPatient('${p.id}')">Edit</button></td></tr>`).join('')}</tbody></table>` : empty(($('#patientSearch')?.value||'').trim().length<2?'Type at least 2 letters to search patients.':'No matching patients.');
 }
 async function openPatient(id){
   selectedPatientId = id;
@@ -145,6 +149,12 @@ async function buildRequestForPatient(id){
   const d = await api(`/api/patients/${id}/details`); selectedPatientId=id;
   const byMed = new Map();
   const lowRepeatThreshold = Number(STATE.settings?.scriptLowRepeatThreshold ?? 1);
+  for (const m of d.prescriptions || []) {
+    const key = norm(m.medication); if(!key) continue;
+    const negative = Number(m.balanceQty) < 0 || m.isInsufficientPillBalance;
+    const noScript = Number(m.repeatsLeft) <= 0;
+    byMed.set(key,{ prescriptionId:m.prescriptionId, medicineName:m.medication, directions:m.direction||'', timing:`Balance ${patientValue(m.balanceQty)} · weekly ${patientValue(m.weeklyQty)}`, repeatsLeft:m.repeatsLeft??'', status:m.requestStatus==='requested'?'Requested':negative&&noScript?'No script / negative balance':negative?'Negative balance':noScript?'New script required':'OK', source:'MyPak prescription', drugCode:m.drugCode||'' });
+  }
   for (const m of d.medicationBalances || []) {
     const key = norm(m.medication);
     if (!key) continue;
@@ -152,7 +162,8 @@ async function buildRequestForPatient(id){
     const lowRepeats = repeats !== '' && Number.isFinite(Number(repeats)) && Number(repeats) <= lowRepeatThreshold;
     const status = m.newScriptNeeded === true ? 'New script required' : lowRepeats ? 'Low repeats' : 'OK';
     const balance = `MyPak balance ${patientValue(m.balanceQty)} · required/week ${patientValue(m.weeklyQty)}`;
-    byMed.set(key, { medicineName: m.medication, directions: m.direction || '', timing: balance, repeatsLeft: repeats, status, source: 'MyPak live balance', drugCode: m.drugCode || '' });
+    const existing = byMed.get(key);
+    byMed.set(key, existing ? { ...existing, directions: existing.directions || m.direction || '', timing: balance, repeatsLeft: existing.repeatsLeft ?? repeats, status: /^(OK)$/i.test(existing.status) ? status : existing.status, source: 'MyPak prescription + balance' } : { medicineName: m.medication, directions: m.direction || '', timing: balance, repeatsLeft: repeats, status, source: 'MyPak live balance', drugCode: m.drugCode || '' });
   }
   for (const m of d.medications || []) {
     const key = norm(m.medicineName);
@@ -175,12 +186,14 @@ async function buildRequestForPatient(id){
     byMed.set(key, existing);
   }
   const items = Array.from(byMed.values()).sort((a,b)=>a.medicineName.localeCompare(b.medicineName));
-  const actionableCount = items.filter(it => it.status !== 'OK').length;
+  const actionableCount = items.filter(it => !/^(OK|Requested)$/i.test(it.status)).length;
+  const doctors = d.doctors || [];
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
   $('#requestBuilder').innerHTML = items.length ? `<div class="builder-head"><div><h3>${esc(d.patient.fullName)}</h3><p class="muted">Search patient → review medicines → only non-OK / low-repeat / owing items go to the GP letter. Saved data stays after refresh/restart until a newer file is imported.</p></div><button class="ghost" onclick="openPatient('${d.patient.id}')">Open profile</button></div>
     <div class="request-summary"><b>${esc(actionableCount)}</b> medicines need action · <b>${esc(items.length-actionableCount)}</b> OK/sufficient-repeat medicines hidden from letter · MyPak balances included</div>
     <div class="request-actions"><button class="ghost" onclick="tickAllRequestItems(true)">Tick action items</button><button class="ghost" onclick="tickAllRequestItems(false)">Untick all</button><label class="inline-check"><input id="showOkItems" type="checkbox" onchange="renderRequestItems()"> Show OK medicines</label></div>
     <div id="requestItems" class="request-list"></div>
+    <label class="field"><span>Prescriber</span><select id="requestDoctor"><option value="">GP / Prescriber</option>${doctors.map(x=>`<option value="${esc(x.doctorId)}">${esc(`${x.firstName||''} ${x.lastName||''}`.trim())}${x.email?` · ${esc(x.email)}`:''}</option>`).join('')}</select></label>
     <textarea id="requestNote" rows="3" placeholder="Optional note to doctor / GP"></textarea>
     <button onclick="createScriptRequest()">Generate PDF script request</button>` : empty('No medicines/scripts found for this patient. Import List of Scripts first, then try this search again.');
   $('#requestBuilder').dataset.items = JSON.stringify(items);
@@ -192,8 +205,8 @@ function renderRequestItems(){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
   const showOk = !!$('#showOkItems')?.checked;
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
-  const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || it.status !== 'OK');
-  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${it.status!=='OK'?'checked':''} ${it.status==='OK'?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small>${it.source?`<em>${esc(it.source)}</em>`:''}</div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines have enough repeats / OK status. Nothing will be added to the GP letter.');
+  const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || !/^(OK|Requested)$/i.test(it.status));
+  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${!/^(OK|Requested)$/i.test(it.status)?'checked':''} ${/^(OK|Requested)$/i.test(it.status)?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small>${it.source?`<em>${esc(it.source)}</em>`:''}${it.status==='Requested'?badge('Requested','ok'):''}</div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines are OK or already requested.');
 }
 function tickAllRequestItems(on){
   $$('#requestItems input[type=checkbox]').forEach(x=>{ if(!x.disabled) x.checked=!!on; });
@@ -205,10 +218,10 @@ async function createScriptRequest(){
     const cb = row.querySelector('input[type=checkbox]');
     const idx = Number(cb.dataset.i);
     const status = row.querySelector('select').value;
-    if(cb.checked && status !== 'OK'){ selected.push({ medicineName: items[idx].medicineName, directions: items[idx].directions || '', repeatsLeft: row.querySelector('.repeat-input').value, status }); }
+    if(cb.checked && status !== 'OK'){ selected.push({ prescriptionId:items[idx].prescriptionId, medicineName: items[idx].medicineName, directions: items[idx].directions || '', repeatsLeft: row.querySelector('.repeat-input').value, status }); }
   });
   if(!selected.length) return toast('No actionable medicine selected. OK / sufficient-repeat medicines are not added to the GP letter.');
-  const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value})});
+  const doctor=$('#requestDoctor'); const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
   toast('PDF script request created.'); window.open(`/api/letter/${r.id}/pdf`,'_blank'); await loadState(); showView('scripts');
 }
 
@@ -236,6 +249,8 @@ function filteredSpecialOrders(){
 }
 function renderSpecialOrders(){
   const orders=filteredSpecialOrders();
+  const s8rx=(STATE.mypakPrescriptions||[]).filter(m=>/\b(s8|schedule\s*8|methylphenidate|ritalin|dexamfetamine|dexamphetamine|vyvanse|lisdexamfetamine|oxycodone|morphine|fentanyl|tapentadol|buprenorphine|targin)\b/i.test(`${m.schedule||''} ${m.medication||''}`)).filter(m=>{const q=($('#specialSearch')?.value||'').toLowerCase().trim();return !q||`${m.firstName||''} ${m.lastName||''} ${m.medication||''} ${m.drugCode||''}`.toLowerCase().includes(q)}).slice(0,80);
+  $('#liveS8List').innerHTML=s8rx.length?s8rx.map(m=>{const p=(STATE.patientsComputed||[]).find(x=>String(x.mypakPatientId)===String(m.patientId));return `<div class="queue-card"><div><h3>${esc(`${m.firstName||''} ${m.lastName||''}`.trim()||p?.fullName)}</h3><p><b>${esc(m.medication)}</b> · balance ${esc(patientValue(m.balanceQty))} · repeats ${esc(patientValue(m.repeatsLeft))}</p><div class="badges">${badge('S8','danger')} ${Number(m.balanceQty)<0?badge('Negative balance','warn'):''}</div></div>${p?`<button onclick="buildRequestForPatient('${p.id}')">Request script</button>`:''}</div>`}).join(''):empty('No matching S8 medicine in the current MyPak sync.');
   $('#specialOrdersList').innerHTML = orders.length ? orders.map(o=>specialOrderCard(o)).join('') : empty('No special orders found. Add one manually or import/update patients first.');
   const patients=STATE.patientsComputed||[];
   $('#specialOrderForm').innerHTML = `<div class="field full"><label>Patient</label><select name="patientId" id="specialPatientSelect">${patients.map(p=>`<option value="${p.id}">${esc(p.fullName)}${p.mypakPatientId?' · MyPak':''}</option>`).join('')}</select></div><div class="field"><label>Medicine</label><input name="medicine" list="specialMedicineOptions" placeholder="Select or type medicine"><datalist id="specialMedicineOptions"></datalist></div>${fieldHTML('strength','Strength','text','')}${fieldHTML('directions','Dose / directions','text','')}${fieldHTML('source','Source','select:RDH|Hibiscus One|CP|NT|Patient/Carer|Other','RDH')}${fieldHTML('category','Category','select:Special Order|S8|S8/Special|External Supply|Patient Supplied','Special Order')}${fieldHTML('lastPickupDate','Last pickup date','date','')}${fieldHTML('cycleDays','Cycle days','number',STATE.settings.defaultCycleDays)}${fieldHTML('orderLeadDays','Order lead days before next pickup','number',STATE.settings.defaultSpecialOrderLeadDays||14)}${fieldHTML('status','Status','select:Needs confirmation|Not ordered|Order due|Request generated|Ordered|Received|Packed|Dispensed|Complete|Cancelled','Not ordered')}${fieldHTML('notes','Notes','textarea','')}<div class="field full"><button>Add special order</button></div>`;
@@ -294,6 +309,8 @@ function renderSettings(){
   const s=STATE.settings;
   const fields=[['defaultCycleDays','Default cycle days'],['defaultPackLeadDays','Pack lead days'],['defaultDispenseLeadDays','Dispense lead days'],['defaultOrderLeadDays','Order lead days'],['urgentWindowDays','Urgent window days'],['dueSoonWindowDays','Due soon window'],['scriptLowRepeatThreshold','Low repeat threshold'],['monthlyDays','Monthly cycle days']];
   $('#settingsForm').innerHTML=fields.map(([k,l])=>fieldHTML(k,l,'number',s[k])).join('')+`<div class="field full"><button>Save settings</button></div>`;
+  const a=STATE.prescriptionAutomation||{}; const f=$('#automationForm');
+  if(f){ f.frequency.value=a.frequency||'manual'; f.intervalDays.value=a.intervalDays||14; f.nextRunDate.value=a.nextRunDate||''; f.recipients.value=a.recipients||''; f.subjectTemplate.value=a.subjectTemplate||''; f.bodyTemplate.value=a.bodyTemplate||''; f.enabled.checked=!!a.enabled; }
   $('#auditLog').innerHTML=(STATE.auditLog||[]).length?`<table><thead><tr><th>Time</th><th>Action</th><th>Details</th></tr></thead><tbody>${STATE.auditLog.slice(0,200).map(a=>`<tr><td>${esc((a.at||'').slice(0,19).replace('T',' '))}</td><td>${esc(a.action)}</td><td><code>${esc(JSON.stringify(a.details||{}))}</code></td></tr>`).join('')}</tbody></table>`:empty('No audit log yet.');
 }
 function showView(id){
@@ -327,12 +344,14 @@ async function importForm(e){
 }
 async function doctorSubmit(e){ e.preventDefault(); const body=Object.fromEntries(new FormData(e.currentTarget).entries()); await api('/api/doctor-updates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); toast('Doctor update added as pending review.'); await loadState(); showView('doctor'); }
 async function settingsSubmit(e){ e.preventDefault(); const body=Object.fromEntries(new FormData(e.currentTarget).entries()); Object.keys(body).forEach(k=>body[k]=Number(body[k])); await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); toast('Settings saved.'); await loadState(); showView('settings'); }
+async function automationSubmit(e){ e.preventDefault(); const fd=new FormData(e.currentTarget); const body=Object.fromEntries(fd.entries()); body.enabled=fd.has('enabled'); await api('/api/prescription-automation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); toast('Prescription schedule and template saved.'); await loadState(); showView('settings'); }
 function renderAll(){ renderDashboard(); renderImportReview(); renderPatients(); renderScriptPage(); renderSpecialOrders(); renderDoctor(); renderSettings(); }
 async function loadState(){ STATE = await api('/api/state'); renderAll(); }
 
 $$('.nav').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
 $('#refreshBtn').addEventListener('click',loadState);
 $('#mypakSyncBtn').addEventListener('click',syncMyPakPatients);
+$('#mypakSyncBtnSettings').addEventListener('click',syncMyPakPatients);
 $$('form.upload-card').forEach(f=>f.addEventListener('submit',importForm));
 $$('form.quick-report-upload').forEach(f=>f.addEventListener('submit',importForm));
 $('#patientSearch').addEventListener('input',renderPatients); $('#patientFilter').addEventListener('change',renderPatients);
@@ -343,5 +362,6 @@ $('#specialOrderForm').addEventListener('submit',specialOrderSubmit);
 $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFilter').addEventListener('change',renderSpecialOrders);
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
-window.openPatient=openPatient; window.editPatient=editPatient; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
+$('#automationForm').addEventListener('submit',automationSubmit);
+window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
 loadState().then(refreshMyPakStatus).catch(e=>toast(e.message));

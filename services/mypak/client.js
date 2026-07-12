@@ -12,7 +12,7 @@ export class MyPakClient {
     this.lastSuccessfulRequestAt = null;
   }
   isConfigured() { return this.auth.isConfigured(); }
-  async request(name, { params, body } = {}) {
+  async request(name, { params, body, query } = {}) {
     const endpoint = MYPAK_ENDPOINTS[name];
     const path = endpointPath(name, params);
     for (let attempt = 0; attempt <= this.retries; attempt++) {
@@ -20,7 +20,8 @@ export class MyPakClient {
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
         const authorization = await this.auth.authorization();
-        const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        const queryString = query ? `?${new URLSearchParams(query).toString()}` : '';
+        const response = await this.fetchImpl(`${this.baseUrl}${path}${queryString}`, {
           method: endpoint.method,
           headers: { accept: 'application/json', 'content-type': 'application/json;charset=UTF-8', authorization },
           body: endpoint.method === 'GET' ? undefined : JSON.stringify(body || {}),
@@ -46,6 +47,10 @@ export class MyPakClient {
   }
   listPatients(body) { return this.request('patientList', { body }); }
   listVirtualPillBalances(body) { return this.request('virtualPillBalances', { body }); }
+  listQuickDispense(body) { return this.request('quickDispense', { body }); }
+  listInsufficientPillBalances(body) { return this.request('insufficientPillBalances', { body }); }
+  listDoctors() { return this.request('doctors', { query: { pageIndex: 1, pageSize: 99999, sortField: 'FirstName', sortOrder: 1 } }); }
+  patientDetail(patientId) { return this.request('patientDetail', { params: { patientId } }); }
   reportOptions() { return this.request('patientReportOptions'); }
   patientGroup(groupId) { return this.request('patientGroup', { params: { groupId } }); }
 }
