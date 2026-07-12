@@ -29,7 +29,6 @@
       </div>
       <div class="top-actions">
         <button class="ghost" id="refreshBtn">Refresh</button>
-        <a class="ghost" href="/api/export/store">Backup JSON</a>
       </div>
     </header>
 
@@ -126,7 +125,6 @@
 
     <section id="settings" class="view">
       <section class="panel" id="mypakPanelSettings"><div class="panel-head"><h2>Data & MyPak sync</h2><span>Read-only MyPak connection</span></div><div class="toolbar"><button id="mypakSyncBtnSettings" type="button">Sync now</button><span>Automatic sync: every 15 minutes, 08:00–18:00.</span></div><div class="three-col settings-imports"><form class="upload-card" data-import="patients"><h3>Patients</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="upload-card" data-import="medications"><h3>Medications</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="upload-card" data-import="scripts"><h3>Scripts</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></section>
-      <section class="panel"><div class="panel-head"><h2>Prescription request schedule</h2><span>Draft queue only until email service is configured</span></div><form id="automationForm" class="form-grid"><div class="field"><label>Schedule</label><select name="frequency"><option value="manual">Manual only</option><option value="interval">Every N days</option><option value="date">Specific date</option></select></div><div class="field"><label>Every N days</label><input name="intervalDays" type="number" min="1" value="14"></div><div class="field"><label>Next date</label><input name="nextRunDate" type="date"></div><div class="field"><label>Recipient email(s)</label><input name="recipients"></div><div class="field full"><label>Subject template</label><input name="subjectTemplate"></div><div class="field full"><label>Message template</label><textarea name="bodyTemplate" rows="6"></textarea></div><div class="field full"><label><input name="enabled" type="checkbox"> Enable draft schedule</label><button>Save schedule & template</button></div></form></section>
       <section class="panel"><div class="panel-head"><h2>Workflow settings</h2><span>default lead days and alert windows</span></div><form id="settingsForm" class="settings-grid"></form></section>
       <section class="panel"><div class="panel-head"><h2>Audit trail</h2><span>who/what/when style log</span></div><div id="auditLog" class="table-wrap"></div></section>
     </section>

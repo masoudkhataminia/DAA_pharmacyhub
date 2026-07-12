@@ -29,33 +29,23 @@ export class MyPakSyncService {
         if (!pageRows.length || (balanceTotal !== null && balances.length >= balanceTotal)) break;
         if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
       }
-      const prescriptions = [];
-      const prescriptionPageSize = 50;
-      const prescriptionMaxPages = Math.max(this.maxPages, 250);
-      for (let pageIndex = 1; pageIndex <= prescriptionMaxPages; pageIndex++) {
-        const response = await this.client.listQuickDispense({ pageIndex, pageSize: prescriptionPageSize, patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString(), sortField: 'LastName', sortOrder: 1 });
-        const pageRows = Array.isArray(response.data) ? response.data : [];
-        const prescriptionTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
-        prescriptions.push(...pageRows);
-        if (!pageRows.length || (prescriptionTotal !== null && prescriptions.length >= prescriptionTotal)) break;
-        if (pageIndex === prescriptionMaxPages) throw new Error('MyPak prescription pagination safety limit reached');
-      }
       const insufficientResponse = await this.client.listInsufficientPillBalances({ patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString() });
       const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
       const doctorsResponse = await this.client.listDoctors();
       const doctors = Array.isArray(doctorsResponse.data) ? doctorsResponse.data : [];
       const dispenseHistory = [];
-      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
-        const response = await this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: '', dateTo: '', dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
+      const today = new Date(); const from = new Date(today); from.setDate(from.getDate() - 90);
+      for (let pageIndex = 1; pageIndex <= 50; pageIndex++) {
+        const response = await this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
         const pageRows = Array.isArray(response.data) ? response.data : [];
         const dispenseTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
         dispenseHistory.push(...pageRows);
         if (!pageRows.length || (dispenseTotal !== null && dispenseHistory.length >= dispenseTotal)) break;
-        if (pageIndex === this.maxPages) throw new Error('MyPak dispense history pagination safety limit reached');
+        if (pageIndex === 50) throw new Error('MyPak dispense history pagination safety limit reached');
       }
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
       store.mypakMedicationBalances = [...new Map(balances.map(row => [String(row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`), row])).values()];
-      store.mypakPrescriptions = [...new Map(prescriptions.map(row => [String(row.prescriptionId), { ...row, isInsufficientPillBalance: insufficient.get(String(row.prescriptionId)) || false }])).values()];
+      store.mypakPrescriptions = store.mypakMedicationBalances.map(row => ({ ...row, prescriptionId: row.prescriptionId || row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`, lastDispenseDate: row.lastDispenseDate || row.lastDispenseBalanceUpdated || '', isInsufficientPillBalance: insufficient.get(String(row.prescriptionId || row.vpBalanceId)) || Number(row.balanceQty) < 0 }));
       store.mypakDoctors = [...new Map(doctors.map(row => [String(row.doctorId), row])).values()];
       store.mypakDispenseHistory = [...new Map(dispenseHistory.map(row => [String(row.scriptTrackingId), row])).values()];
       store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, totalDispenseHistory: store.mypakDispenseHistory.length, status: 'success' };
