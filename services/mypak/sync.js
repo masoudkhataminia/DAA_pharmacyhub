@@ -44,11 +44,21 @@ export class MyPakSyncService {
       const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
       const doctorsResponse = await this.client.listDoctors();
       const doctors = Array.isArray(doctorsResponse.data) ? doctorsResponse.data : [];
+      const dispenseHistory = [];
+      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
+        const response = await this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: '', dateTo: '', dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
+        const pageRows = Array.isArray(response.data) ? response.data : [];
+        const dispenseTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
+        dispenseHistory.push(...pageRows);
+        if (!pageRows.length || (dispenseTotal !== null && dispenseHistory.length >= dispenseTotal)) break;
+        if (pageIndex === this.maxPages) throw new Error('MyPak dispense history pagination safety limit reached');
+      }
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
       store.mypakMedicationBalances = [...new Map(balances.map(row => [String(row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`), row])).values()];
       store.mypakPrescriptions = [...new Map(prescriptions.map(row => [String(row.prescriptionId), { ...row, isInsufficientPillBalance: insufficient.get(String(row.prescriptionId)) || false }])).values()];
       store.mypakDoctors = [...new Map(doctors.map(row => [String(row.doctorId), row])).values()];
-      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, status: 'success' };
+      store.mypakDispenseHistory = [...new Map(dispenseHistory.map(row => [String(row.scriptTrackingId), row])).values()];
+      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, totalDispenseHistory: store.mypakDispenseHistory.length, status: 'success' };
       this.writeStore(store); Object.assign(this.status, stats, { running: false, progress: 100, finishedAt: at });
       return { started: true, status: this.getStatus() };
     } catch (error) {

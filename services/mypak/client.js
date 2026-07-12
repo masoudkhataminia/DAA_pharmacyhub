@@ -51,6 +51,7 @@ export class MyPakClient {
   listInsufficientPillBalances(body) { return this.request('insufficientPillBalances', { body }); }
   listDoctors() { return this.request('doctors', { query: { pageIndex: 1, pageSize: 99999, sortField: 'FirstName', sortOrder: 1 } }); }
   patientDetail(patientId) { return this.request('patientDetail', { params: { patientId } }); }
+  listDispenseTracking(body) { return this.request('dispenseTracking', { body }); }
   reportOptions() { return this.request('patientReportOptions'); }
   patientGroup(groupId) { return this.request('patientGroup', { params: { groupId } }); }
 }

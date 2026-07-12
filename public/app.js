@@ -185,6 +185,16 @@ async function buildRequestForPatient(id){
     existing.source = existing.source === 'Medication list' ? 'Medication + script' : 'Script list';
     byMed.set(key, existing);
   }
+  const latestDispense = new Map();
+  for (const x of d.dispenseHistory || []) {
+    const key=norm(x.drugName); if(!key) continue;
+    const old=latestDispense.get(key); if(!old || String(x.dateDispensed||'')>String(old.dateDispensed||'')) latestDispense.set(key,x);
+  }
+  for (const [key,x] of latestDispense) {
+    const existing=byMed.get(key)||{medicineName:x.drugName,directions:x.direction||'',repeatsLeft:'',status:'Manual review',source:'MyPak dispense history'};
+    const owing=/owing/i.test(`${x.scriptStatus||''} ${x.dispenseStatus||''}`) || (!x.scriptNumber && Number(x.quantity||x.manuallyQuantity)>0);
+    byMed.set(key,{...existing,scriptNumber:x.scriptNumber||x.calculatedScriptNumber||existing.scriptNumber||'',lastDispenseDate:x.dateDispensed||'',lastDispenseQty:x.quantity??x.manuallyQuantity??'',dispenseStatus:x.dispenseStatus??'',owing, status:owing?'Script owing':existing.status,source:`${existing.source||'MyPak'} + dispense`});
+  }
   const items = Array.from(byMed.values()).sort((a,b)=>a.medicineName.localeCompare(b.medicineName));
   const actionableCount = items.filter(it => !/^(OK|Requested)$/i.test(it.status)).length;
   const doctors = d.doctors || [];
@@ -206,7 +216,7 @@ function renderRequestItems(){
   const showOk = !!$('#showOkItems')?.checked;
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
   const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || !/^(OK|Requested)$/i.test(it.status));
-  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${!/^(OK|Requested)$/i.test(it.status)?'checked':''} ${/^(OK|Requested)$/i.test(it.status)?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small>${it.source?`<em>${esc(it.source)}</em>`:''}${it.status==='Requested'?badge('Requested','ok'):''}</div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines are OK or already requested.');
+  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${!/^(OK|Requested)$/i.test(it.status)?'checked':''} ${/^(OK|Requested)$/i.test(it.status)?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small><small>Last dispense: <b>${esc(it.lastDispenseDate||'—')}</b> · Qty: <b>${esc(patientValue(it.lastDispenseQty))}</b> · Script: <b>${esc(it.scriptNumber||'—')}</b></small>${it.source?`<em>${esc(it.source)}</em>`:''}${it.owing?badge('OWING','danger'):''}${it.status==='Requested'?badge('Requested','ok'):''}</div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines are OK or already requested.');
 }
 function tickAllRequestItems(on){
   $$('#requestItems input[type=checkbox]').forEach(x=>{ if(!x.disabled) x.checked=!!on; });
@@ -218,7 +228,7 @@ async function createScriptRequest(){
     const cb = row.querySelector('input[type=checkbox]');
     const idx = Number(cb.dataset.i);
     const status = row.querySelector('select').value;
-    if(cb.checked && status !== 'OK'){ selected.push({ prescriptionId:items[idx].prescriptionId, medicineName: items[idx].medicineName, directions: items[idx].directions || '', repeatsLeft: row.querySelector('.repeat-input').value, status }); }
+    if(cb.checked && status !== 'OK'){ selected.push({ prescriptionId:items[idx].prescriptionId, medicineName: items[idx].medicineName, directions: items[idx].directions || '', repeatsLeft: row.querySelector('.repeat-input').value, status, scriptNumber:items[idx].scriptNumber||'', lastDispenseDate:items[idx].lastDispenseDate||'', lastDispenseQty:items[idx].lastDispenseQty??'', owing:!!items[idx].owing }); }
   });
   if(!selected.length) return toast('No actionable medicine selected. OK / sufficient-repeat medicines are not added to the GP letter.');
   const doctor=$('#requestDoctor'); const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
