@@ -1,5 +1,6 @@
 export const MYPAK_ENDPOINTS = Object.freeze({
   patientList: { method: 'POST', path: '/patients/list' },
+  virtualPillBalances: { method: 'POST', path: '/vpbbalances/list' },
   patientReportOptions: { method: 'GET', path: '/patientreportoption' },
   patientGroup: { method: 'GET', path: '/patientGroups/:groupId' }
 });
