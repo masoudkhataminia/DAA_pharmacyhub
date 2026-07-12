@@ -829,7 +829,14 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => console.log(`Webster Pack Pro v2.3.5 running on http://localhost:${PORT}`));
   const syncMinutes = Number(process.env.MYPAK_SYNC_INTERVAL_MINUTES || 0);
-  if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
+  const syncStartHour = Number(process.env.MYPAK_SYNC_START_HOUR || 8);
+  const syncEndHour = Number(process.env.MYPAK_SYNC_END_HOUR || 18);
+  const syncTimeZone = process.env.MYPAK_SYNC_TIME_ZONE || 'Australia/Darwin';
+  const withinSyncWindow = () => {
+    const hour = Number(new Intl.DateTimeFormat('en-AU', { timeZone: syncTimeZone, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+    return hour >= syncStartHour && hour < syncEndHour;
+  };
+  if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
 export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient };
