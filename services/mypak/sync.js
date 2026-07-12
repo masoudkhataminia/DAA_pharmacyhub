@@ -20,8 +20,18 @@ export class MyPakSyncService {
         if (!pageRows.length || (total !== null && rows.length >= total)) break;
         if (pageIndex === this.maxPages) throw new Error('MyPak pagination safety limit reached');
       }
+      const balances = [];
+      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
+        const response = await this.client.listVirtualPillBalances({ pageIndex, pageSize: this.pageSize, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] });
+        const pageRows = Array.isArray(response.data) ? response.data : [];
+        const balanceTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
+        balances.push(...pageRows);
+        if (!pageRows.length || (balanceTotal !== null && balances.length >= balanceTotal)) break;
+        if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
+      }
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
-      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, status: 'success' };
+      store.mypakMedicationBalances = balances;
+      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: balances.length, status: 'success' };
       this.writeStore(store); Object.assign(this.status, stats, { running: false, progress: 100, finishedAt: at });
       return { started: true, status: this.getStatus() };
     } catch (error) {
