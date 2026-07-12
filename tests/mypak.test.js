@@ -23,6 +23,21 @@ test('successful patient list uses authorization but never returns or logs token
   assert.doesNotMatch(fs.readFileSync(new URL('../services/mypak/client.js', import.meta.url), 'utf8'), /console\.(log|error|warn)/);
 });
 
+test('username login is kept server-side and supplies the returned token', async () => {
+  const requests = [];
+  const client = new MyPakClient({ env: { MYPAK_USERNAME: 'user', MYPAK_PASSWORD: 'pass' }, retries: 0, fetchImpl: async (url, options) => { requests.push({ url, options }); return url.endsWith('/token') ? response(200, { token: 'fresh-token', refreshToken: 'refresh-token' }) : response(200, { isSuccess: true, data: [], total: 0 }); } });
+  await client.listPatients({ pageIndex: 1 });
+  assert.match(requests[0].url, /\/token$/); assert.deepEqual(JSON.parse(requests[0].options.body), { username: 'user', password: 'pass' });
+  assert.equal(requests[1].options.headers.authorization, 'fresh-token');
+});
+
+test('expired token automatically logs in again when credentials are configured', async () => {
+  const requests = [];
+  const client = new MyPakClient({ env: { MYPAK_AUTHORIZATION: 'expired', MYPAK_USERNAME: 'user', MYPAK_PASSWORD: 'pass' }, retries: 1, fetchImpl: async (url, options) => { requests.push({ url, options }); if (url.endsWith('/token')) return response(200, { token: 'fresh', refreshToken: 'refresh' }); if (options.headers.authorization === 'expired') return response(401, {}); return response(200, { isSuccess: true, data: [], total: 0 }); } });
+  await client.listPatients({ pageIndex: 1 });
+  assert.equal(requests.filter(r => r.url.endsWith('/patients/list')).length, 2); assert.equal(requests.at(-1).options.headers.authorization, 'fresh');
+});
+
 test('virtual pill balance uses the allowlisted MyPak endpoint', async () => {
   let request;
   const client = new MyPakClient({ env: { MYPAK_AUTHORIZATION: 'x' }, retries: 0, fetchImpl: async (url, options) => { request = { url, options }; return response(200, { isSuccess: true, data: [], total: 0 }); } });
