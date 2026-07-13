@@ -21,29 +21,15 @@ export class MyPakSyncService {
         if (!pageRows.length || (total !== null && rows.length >= total)) break;
         if (pageIndex === this.maxPages) throw new Error('MyPak pagination safety limit reached');
       }
-      const balances = [];
-      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
-        const response = await this.client.listVirtualPillBalances({ pageIndex, pageSize: this.pageSize, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] });
-        const pageRows = Array.isArray(response.data) ? response.data : [];
-        const balanceTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
-        balances.push(...pageRows);
-        if (!pageRows.length || (balanceTotal !== null && balances.length >= balanceTotal)) break;
-        if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
-      }
+      const balanceResponse = await this.client.listVirtualPillBalances({ pageIndex: 1, pageSize: 99999, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] });
+      const balances = Array.isArray(balanceResponse.data) ? balanceResponse.data : [];
       const insufficientResponse = await this.client.listInsufficientPillBalances({ patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString() });
       const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
       const doctorsResponse = await this.client.listDoctors();
       const doctors = Array.isArray(doctorsResponse.data) ? doctorsResponse.data : [];
-      const dispenseHistory = [];
       const today = new Date(); const from = new Date(today); from.setDate(from.getDate() - 90);
-      for (let pageIndex = 1; pageIndex <= 50; pageIndex++) {
-        const response = await this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
-        const pageRows = Array.isArray(response.data) ? response.data : [];
-        const dispenseTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
-        dispenseHistory.push(...pageRows);
-        if (!pageRows.length || (dispenseTotal !== null && dispenseHistory.length >= dispenseTotal)) break;
-        if (pageIndex === 50) throw new Error('MyPak dispense history pagination safety limit reached');
-      }
+      const dispenseResponse = await this.client.listDispenseTracking({ pageIndex: 1, pageSize: 99999, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
+      const dispenseHistory = Array.isArray(dispenseResponse.data) ? dispenseResponse.data : [];
       const createdDateTo = new Date(); const createdDateFrom = new Date(createdDateTo); createdDateFrom.setDate(createdDateFrom.getDate() - 120);
       // MyPak's own summary UI requests large snapshots. One snapshot avoids dozens of slow
       // 200-row calls while remaining bounded to the confirmed 120-day read-only window.
