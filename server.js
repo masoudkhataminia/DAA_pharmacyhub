@@ -369,8 +369,11 @@ function buildMedication(wrap) {
 }
 function inferRequestFlag(repeatsLeft, owing, settings) {
   if (owing) return 'Script owing';
-  if (repeatsLeft <= 0) return 'New script required';
-  if (repeatsLeft <= settings.scriptLowRepeatThreshold) return 'Low repeats';
+  const repeatText = cleanText(repeatsLeft);
+  const repeatPosition = repeatText === '' ? null : Number(repeatText);
+  if (!Number.isFinite(repeatPosition)) return 'Manual request';
+  if (repeatPosition <= 0) return 'New script required';
+  if (repeatPosition <= settings.scriptLowRepeatThreshold) return 'Low repeats';
   return 'OK';
 }
 
@@ -392,7 +395,27 @@ function indexFor(map, aliases) {
 function arrVal(arr, idx) { return idx >= 0 ? arr[idx] : ''; }
 function scriptRowsFast(buffer, settings, store) {
   const wb = XLSX.read(buffer, { type: 'buffer', raw: false, cellDates: false });
-  const patientKeys = new Set((store.patients || []).map(p => normalizeName(p.fullName)).filter(Boolean));
+  const patientAliases = new Map();
+  const addPatientAlias = (value, patient) => {
+    const key = normalizeName(value);
+    if (!key) return;
+    const existing = patientAliases.get(key);
+    patientAliases.set(key, existing && existing !== patient ? null : patient);
+  };
+  for (const patient of store.patients || []) {
+    const fullName = cleanText(patient.fullName);
+    const commaParts = fullName.split(',').map(cleanText).filter(Boolean);
+    const aliases = [
+      fullName,
+      [patient.firstName, patient.lastName].filter(Boolean).join(' '),
+      [patient.lastName, patient.firstName].filter(Boolean).join(' ')
+    ];
+    if (commaParts.length >= 2) aliases.push(`${commaParts.slice(1).join(' ')} ${commaParts[0]}`, `${commaParts[0]} ${commaParts.slice(1).join(' ')}`);
+    for (const alias of aliases) {
+      addPatientAlias(alias, patient);
+      addPatientAlias(cleanPackNamePart(alias), patient);
+    }
+  }
   const byPatientMedicine = new Map();
   let totalRows = 0, parsed = 0, matched = 0, skippedNoNameOrDrug = 0, skippedNonMedicine = 0;
 
@@ -436,22 +459,33 @@ function scriptRowsFast(buffer, settings, store) {
       const drug = cleanText(arrVal(arr, idx.drug));
       if (!full || !drug) { skippedNoNameOrDrug++; continue; }
       if (/\b(packing\s*fee|webster\s*fee|pack\s*fee|hibiscus\s*packing\s*fee)\b/i.test(drug)) { skippedNonMedicine++; continue; }
-      const patientNameKey = normalizeName(full);
+      const rowAliases = [
+        full,
+        [first, middle, last].filter(Boolean).join(' '),
+        [last, first, middle].filter(Boolean).join(' '),
+        [cleanPackNamePart(first), cleanPackNamePart(middle), cleanPackNamePart(last)].filter(Boolean).join(' '),
+        [cleanPackNamePart(last), cleanPackNamePart(first), cleanPackNamePart(middle)].filter(Boolean).join(' ')
+      ].map(normalizeName).filter(Boolean);
+      const matchedPatients = [...new Set(rowAliases.map(alias => patientAliases.get(alias)).filter(Boolean))];
+      const matchedPatient = matchedPatients.length === 1 ? matchedPatients[0] : null;
       // If patients have been imported, keep only matched Webster/HIND patients. If not, keep HIND rows so the user still gets useful data.
-      if (patientKeys.size && !patientKeys.has(patientNameKey)) continue;
-      if (!patientKeys.size && !hasHindValue([arrVal(arr, idx.first), arrVal(arr, idx.middle), arrVal(arr, idx.last), arrVal(arr, idx.full)].join(' '))) continue;
+      if (patientAliases.size && !matchedPatient) continue;
+      if (!patientAliases.size && !hasHindValue([arrVal(arr, idx.first), arrVal(arr, idx.middle), arrVal(arr, idx.last), arrVal(arr, idx.full)].join(' '))) continue;
       parsed++;
       matched++;
       const explicitRepeatsLeft = arrVal(arr, idx.repeatsLeft);
-      const repeatsIssued = num(arrVal(arr, idx.repeatsIssued), 0);
+      const explicitRepeatsIssued = arrVal(arr, idx.repeatsIssued);
+      const repeatsIssued = idx.repeatsIssued >= 0 && cleanText(explicitRepeatsIssued) !== '' ? num(explicitRepeatsIssued, 0) : null;
       const supplyNo = Math.max(1, num(arrVal(arr, idx.supplyNumber), 1));
-      const repeatsLeft = explicitRepeatsLeft !== undefined && cleanText(explicitRepeatsLeft) !== ''
+      const repeatsLeft = idx.repeatsLeft >= 0 && cleanText(explicitRepeatsLeft) !== ''
         ? Math.max(0, num(explicitRepeatsLeft, 0))
-        : Math.max(0, repeatsIssued - (supplyNo - 1));
+        : repeatsIssued === null ? null : Math.max(0, repeatsIssued - (supplyNo - 1));
       const owingText = lower(arrVal(arr, idx.owing));
       const owing = ['yes','y','true','1','owing','script owing'].includes(owingText) || /owing/i.test(owingText);
+      const patientFullName = matchedPatient?.fullName || full;
+      const patientNameKey = normalizeName(patientFullName);
       const script = {
-        id: id(), patientFullName: full, patientNameKey, drugDescription: drug, medicineKey: normalizeName(drug),
+        id: id(), patientFullName, patientNameKey, drugDescription: drug, medicineKey: normalizeName(drug),
         directions: cleanText(arrVal(arr, idx.directions)), dispenseDate: dateOrBlank(arrVal(arr, idx.dispenseDate)),
         dispenseDateDisplay: dateDisplay(arrVal(arr, idx.dispenseDate)), repeatsIssued, supplyNumber: supplyNo, repeatsLeft, owing,
         schedule: cleanText(arrVal(arr, idx.schedule)), scriptNumber: cleanText(arrVal(arr, idx.scriptNumber)),
