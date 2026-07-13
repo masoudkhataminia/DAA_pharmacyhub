@@ -29,7 +29,7 @@ The allowlisted registry is in `services/mypak/endpoints.js`; `config/mypak-endp
 
 Test the connection with `POST /api/mypak/test`. Start a full patient sync with `POST /api/mypak/sync/patients`; `POST /api/mypak/sync/all` additionally caches confirmed report options and each group referenced by the synced patients. Monitor with `GET /api/mypak/sync/status`. The Import Centre provides the patient sync control and reloads `/api/state` after success.
 
-Patient and pack-job pages are requested sequentially, with a 200-record page size and 100-page safety limit. Pack jobs from the last 120 days are merged by immutable `jobId`, so a later sync updates status/ownership instead of duplicating the job. Exact dose allocations are fetched only for the selected patient's relevant packs and cached locally. No MyPak complete, confirm, reject, reverse, delete, or edit endpoint is allowlisted.
+Patient pages are requested sequentially. Large balance and dispense datasets use bounded four-request batches, a 200-record page size, and explicit page limits. The main refresh reads the lightweight 120-day pack summary; the selected patient's one-year pack history is then fetched live on demand and merged by immutable `jobId`, so status/ownership is updated instead of duplicated. Exact dose allocations are fetched only for that patient's relevant packs and cached locally. No MyPak complete, confirm, reject, reverse, delete, or edit endpoint is allowlisted.
 
 Temporary 429, 5xx, timeout, and network failures receive limited backoff retries. Existing patients are matched by MyPak ID, external ID, name plus DOB, then name-only for review. Uncertain matches and locally cached MyPak patients missing from a later sync are reviewed, never silently merged or deleted.
 
