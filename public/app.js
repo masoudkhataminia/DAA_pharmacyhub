@@ -146,6 +146,18 @@ function renderScriptPatientSearch(){
   $('#scriptPatientResults').innerHTML = results.length ? results.map(p=>`<div class="queue-card ${p.id===selectedPatientId?'selected-card':''}"><div><h3>${esc(p.fullName)}</h3><p>${esc(p.nextPickupDisplay||'pickup not set')} · cycle ${esc(p.cycleDays)} days</p><div class="badges">${patientBadges(p)}</div></div><button class="ghost" onclick="buildRequestForPatient('${p.id}')">Select</button></div>`).join('') : empty('No patient found. Check spelling or import List of Patients first.');
 }
 function norm(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();}
+function repeatPosition(value){
+  const text = String(value ?? '').trim();
+  if (text === '') return null;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
+}
+function shouldAutoSelectScript(item){
+  if (/^Requested$/i.test(item?.status || '')) return false;
+  if (item?.owing || /^Script owing$/i.test(item?.status || '')) return true;
+  const repeats = repeatPosition(item?.repeatsLeft);
+  return repeats !== null && repeats < 2;
+}
 async function buildRequestForPatient(id){
   const d = await api(`/api/patients/${id}/details`); selectedPatientId=id;
   const byMed = new Map();
@@ -196,13 +208,15 @@ async function buildRequestForPatient(id){
     const owing=/owing/i.test(`${x.scriptStatus||''} ${x.dispenseStatus||''}`) || (!x.scriptNumber && Number(x.quantity||x.manuallyQuantity)>0);
     byMed.set(key,{...existing,scriptNumber:x.scriptNumber||x.calculatedScriptNumber||existing.scriptNumber||'',lastDispenseDate:x.dateDispensed||'',lastDispenseQty:x.quantity??x.manuallyQuantity??'',dispenseStatus:x.dispenseStatus??'',owing, status:owing?'Script owing':existing.status,source:`${existing.source||'MyPak'} + dispense`});
   }
-  const items = Array.from(byMed.values()).sort((a,b)=>a.medicineName.localeCompare(b.medicineName));
-  const actionableCount = items.filter(it => !/^(OK|Requested)$/i.test(it.status)).length;
+  const items = Array.from(byMed.values()).sort((a,b)=>a.medicineName.localeCompare(b.medicineName)).map(it=>({...it,selected:shouldAutoSelectScript(it)}));
+  const actionableCount = items.filter(it => it.selected).length;
+  const owingCount = items.filter(it => it.selected && (it.owing || /^Script owing$/i.test(it.status||''))).length;
+  const lowRepeatCount = items.filter(it => it.selected && repeatPosition(it.repeatsLeft) !== null && repeatPosition(it.repeatsLeft) < 2).length;
   const doctors = d.doctors || [];
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
-  $('#requestBuilder').innerHTML = items.length ? `<div class="builder-head"><div><h3>${esc(d.patient.fullName)}</h3><p class="muted">Search patient → review medicines → only non-OK / low-repeat / owing items go to the GP letter. Saved data stays after refresh/restart until a newer file is imported.</p></div><button class="ghost" onclick="openPatient('${d.patient.id}')">Open profile</button></div>
-    <div class="request-summary"><b>${esc(actionableCount)}</b> medicines need action · <b>${esc(items.length-actionableCount)}</b> OK/sufficient-repeat medicines hidden from letter · MyPak balances included</div>
-    <div class="request-actions"><button class="ghost" onclick="tickAllRequestItems(true)">Tick action items</button><button class="ghost" onclick="tickAllRequestItems(false)">Untick all</button><label class="inline-check"><input id="showOkItems" type="checkbox" onchange="renderRequestItems()"> Show OK medicines</label></div>
+  $('#requestBuilder').innerHTML = items.length ? `<div class="builder-head"><div><h3>${esc(d.patient.fullName)}</h3><p class="muted">Ready to send: every script with fewer than 2 repeats and every owing script is selected automatically. Untick anything you do not want, or show all medicines to add one manually.</p></div><button class="ghost" onclick="openPatient('${d.patient.id}')">Open profile</button></div>
+    <div class="request-summary"><b>${esc(actionableCount)}</b> selected automatically · <b>${esc(lowRepeatCount)}</b> with 0–1 repeats · <b>${esc(owingCount)}</b> owing · <b>${esc(items.length-actionableCount)}</b> not selected</div>
+    <div class="request-actions"><button class="ghost" onclick="tickAllRequestItems(true)">Restore automatic selection</button><button class="ghost" onclick="tickAllRequestItems(false)">Untick all</button><label class="inline-check"><input id="showOkItems" type="checkbox" onchange="renderRequestItems()"> Show all medicines / add manually</label></div>
     <div id="requestItems" class="request-list"></div>
     <label class="field"><span>Prescriber</span><select id="requestDoctor"><option value="">GP / Prescriber</option>${doctors.map(x=>`<option value="${esc(x.doctorId)}">${esc(`${x.firstName||''} ${x.lastName||''}`.trim())}${x.email?` · ${esc(x.email)}`:''}</option>`).join('')}</select></label>
     <textarea id="requestNote" rows="3" placeholder="Optional note to doctor / GP"></textarea>
@@ -216,21 +230,45 @@ function renderRequestItems(){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
   const showOk = !!$('#showOkItems')?.checked;
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
-  const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || !/^(OK|Requested)$/i.test(it.status));
-  $('#requestItems').innerHTML = visible.length ? visible.map(it=>`<div class="request-item professional ${it.status==='OK'?'ok-item':''}"><input type="checkbox" data-i="${it._i}" ${!/^(OK|Requested)$/i.test(it.status)?'checked':''} ${/^(OK|Requested)$/i.test(it.status)?'disabled':''}><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small><small>Last dispense: <b>${esc(it.lastDispenseDate||'—')}</b> · Qty: <b>${esc(patientValue(it.lastDispenseQty))}</b> · Script: <b>${esc(it.scriptNumber||'—')}</b></small>${it.source?`<em>${esc(it.source)}</em>`:''}${it.owing?badge('OWING','danger'):''}${it.status==='Requested'?badge('Requested','ok'):''}</div><label><span>Repeats left</span><input class="repeat-input" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..."></label><label><span>Status</span><select>${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`).join('') : empty('All medicines are OK or already requested.');
+  const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || it.selected);
+  $('#requestItems').innerHTML = visible.length ? visible.map(it=>{const repeats=repeatPosition(it.repeatsLeft);return `<div class="request-item professional ${it.selected?'':'ok-item'}"><input type="checkbox" data-i="${it._i}" ${it.selected?'checked':''} onchange="requestItemToggled(this)"><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small><small>Last dispense: <b>${esc(it.lastDispenseDate||'—')}</b> · Qty: <b>${esc(patientValue(it.lastDispenseQty))}</b> · Script: <b>${esc(it.scriptNumber||'—')}</b></small>${it.source?`<em>${esc(it.source)}</em>`:''}${it.owing||/^Script owing$/i.test(it.status||'')?badge('OWING — script required','danger'):''}${repeats!==null&&repeats<2?badge(`${repeats} repeat${repeats===1?'':'s'} left`,'warn'):''}${it.status==='Requested'?badge('Already requested','ok'):''}</div><label><span>Repeats left</span><input class="repeat-input" data-i="${it._i}" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..." onchange="requestRepeatChanged(this)"></label><label><span>Status</span><select data-i="${it._i}" onchange="requestStatusChanged(this)">${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`}).join('') : empty('No script has fewer than 2 repeats and no owing script was found. Use “Show all medicines” to add one manually.');
 }
 function tickAllRequestItems(on){
-  $$('#requestItems input[type=checkbox]').forEach(x=>{ if(!x.disabled) x.checked=!!on; });
+  const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
+  items.forEach(it=>{it.selected=on?shouldAutoSelectScript(it):false;});
+  $('#requestBuilder').dataset.items=JSON.stringify(items);
+  renderRequestItems();
+}
+function requestItemToggled(input){
+  const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
+  const item = items[Number(input.dataset.i)]; if(!item) return;
+  item.selected=!!input.checked;
+  if(item.selected && /^(OK|Requested)$/i.test(item.status||'')) item.status='Manual request';
+  $('#requestBuilder').dataset.items=JSON.stringify(items);
+  renderRequestItems();
+}
+function requestStatusChanged(select){
+  const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
+  const item = items[Number(select.dataset.i)]; if(!item) return;
+  item.status=select.value;
+  item.owing=/^Script owing$/i.test(select.value);
+  item.selected=!/^(OK|Requested)$/i.test(select.value);
+  $('#requestBuilder').dataset.items=JSON.stringify(items);
+  renderRequestItems();
+}
+function requestRepeatChanged(input){
+  const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
+  const item = items[Number(input.dataset.i)]; if(!item) return;
+  item.repeatsLeft=input.value.trim();
+  const repeats=repeatPosition(item.repeatsLeft);
+  if(!item.owing && repeats!==null){item.status=repeats<=0?'New script required':repeats<2?'Low repeats':'OK';}
+  item.selected=shouldAutoSelectScript(item);
+  $('#requestBuilder').dataset.items=JSON.stringify(items);
+  renderRequestItems();
 }
 async function createScriptRequest(){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
-  const selected=[];
-  $$('#requestItems .request-item').forEach((row)=>{
-    const cb = row.querySelector('input[type=checkbox]');
-    const idx = Number(cb.dataset.i);
-    const status = row.querySelector('select').value;
-    if(cb.checked && status !== 'OK'){ selected.push({ prescriptionId:items[idx].prescriptionId, medicineName: items[idx].medicineName, directions: items[idx].directions || '', repeatsLeft: row.querySelector('.repeat-input').value, status, scriptNumber:items[idx].scriptNumber||'', lastDispenseDate:items[idx].lastDispenseDate||'', lastDispenseQty:items[idx].lastDispenseQty??'', owing:!!items[idx].owing }); }
-  });
+  const selected=items.filter(item=>item.selected).map(item=>({ prescriptionId:item.prescriptionId, medicineName:item.medicineName, directions:item.directions||'', repeatsLeft:item.repeatsLeft??'', status:/^OK$/i.test(item.status||'')?'Manual request':item.status, scriptNumber:item.scriptNumber||'', lastDispenseDate:item.lastDispenseDate||'', lastDispenseQty:item.lastDispenseQty??'', owing:!!item.owing }));
   if(!selected.length) return toast('No actionable medicine selected. OK / sufficient-repeat medicines are not added to the GP letter.');
   const doctor=$('#requestDoctor'); const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
   toast('PDF script request created.'); window.open(`/api/letter/${r.id}/pdf`,'_blank'); await loadState(); showView('scripts');
@@ -370,5 +408,5 @@ $('#specialOrderForm').addEventListener('submit',specialOrderSubmit);
 $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFilter').addEventListener('change',renderSpecialOrders);
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
-window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
+window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
 loadState().then(refreshMyPakStatus).catch(e=>toast(e.message));

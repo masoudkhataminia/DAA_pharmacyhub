@@ -46,4 +46,7 @@ assert.equal(matchedScripts.scripts[0].repeatsLeft, 4);
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
 assert.match(publicApp, /const noScript = m\.newScriptNeeded === true/);
+assert.match(publicApp, /repeats !== null && repeats < 2/);
+assert.match(publicApp, /item\?\.owing \|\| \/\^Script owing\$\//);
+assert.match(publicApp, /items\.filter\(item=>item\.selected\)/);
 console.log('Smoke tests passed.');
