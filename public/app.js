@@ -2,7 +2,7 @@ let STATE = null;
 let selectedPatientId = null;
 let editPatientId = null;
 let MPS_CONNECTION = null;
-const CLIENT_BUILD_VERSION = '20260714-repeat-request-v3';
+const CLIENT_BUILD_VERSION = '20260714-last-repeat-owing-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
