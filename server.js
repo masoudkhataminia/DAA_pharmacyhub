@@ -1098,25 +1098,29 @@ app.patch('/api/script-request/:id', (req, res) => { const store = readStore(); 
 app.post('/api/doctor-updates', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.body.patientId); if (!p) return res.status(404).json({ error: 'Patient not found' }); const update = { id: id(), patientId: p.id, patientFullName: p.fullName, receivedDate: dateOrBlank(req.body.receivedDate) || toISODate(todayDate()), source: cleanText(req.body.source || 'Doctor letter'), changeType: cleanText(req.body.changeType || 'Medication change'), medicine: cleanText(req.body.medicine), oldDirection: cleanText(req.body.oldDirection), newDirection: cleanText(req.body.newDirection), effectiveFrom: cleanText(req.body.effectiveFrom || 'Needs review'), status: 'Pending pharmacist review', risk: cleanText(req.body.risk || 'Routine'), notes: cleanText(req.body.notes), createdAt: nowISO() }; store.doctorUpdates.unshift(update); p.urgent = p.urgent || /urgent|current|immediate/i.test(update.risk + ' ' + update.effectiveFrom); audit(store, 'Added doctor medication update', { patient: p.fullName, medicine: update.medicine, changeType: update.changeType }); writeStore(store); res.json(update); });
 app.patch('/api/doctor-updates/:id', (req, res) => { const store = readStore(); const u = store.doctorUpdates.find(x => x.id === req.params.id); if (!u) return res.status(404).json({ error: 'Doctor update not found' }); Object.assign(u, req.body, { updatedAt: nowISO() }); audit(store, 'Updated doctor update', { patient: u.patientFullName, status: u.status }); writeStore(store); res.json(u); });
 function scriptLetterHtml(r) {
-  const rows = r.items.map(i => {
+  const rowHtml = items => items.map(i => {
     const reason = cleanText(i.status || i.requestFlag || 'New prescription required');
     const repeats = cleanText(i.repeatsLeft ?? '');
     const detail = reason === 'Script owing' ? 'Script owing' : (repeats !== '' ? `${repeats} repeat${repeats === '1' ? '' : 's'} left` : reason);
     return `<tr><td>${htmlEsc(i.medicineName || i.drugDescription)}</td><td>${htmlEsc(detail)}</td></tr>`;
-  }).join('');
+  }).concat(Array.from({ length: Math.max(0, 8 - items.length) }, () => '<tr><td>&nbsp;</td><td>&nbsp;</td></tr>')).join('');
+  const items = r.items || [];
+  const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 8)) }, (_, index) => items.slice(index * 8, index * 8 + 8));
+  const copy = chunk => `<section class="copy">
+    <div class="important">IMPORTANT</div>
+    <div class="pharmacy">Hibiscus Day and Night Pharmacy<br><br>Hibiscus Shopping Centre,<br><br>4/8 Leanyer Dr,<br><br>Leanyer NT 0812<br><br>(08) 8945 5955</div>
+    <div class="title">New Prescription Required</div>
+    <div class="body"><p>Dear Dr,</p>
+    <p>Our client, <span class="patient-name">${htmlEsc(r.patientFullName)}</span> is picking up monthly medication from us. The following is the prescription that are due in the next two months:</p>
+    <table class="script-table"><tbody>${rowHtml(chunk)}</tbody></table>
+    ${r.note ? `<p class="note"><b>Note:</b> ${htmlEsc(r.note)}</p>` : ''}
+    <p>Kindly review and provide the prescription if it is appropriate. Thanks a lot.</p>
+    <p class="footer">Kind Regards,<br>Hibiscus Pharmacy</p></div>
+  </section>`;
+  const pages = chunks.map(chunk => `<div class="sheet">${copy(chunk)}${copy(chunk)}</div>`).join('');
   return `<!doctype html><html><head><title>New Prescription Required - ${htmlEsc(r.patientFullName)}</title><style>
-    @page{size:A4;margin:22mm 20mm}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;font-size:12pt;line-height:1.35}.page{max-width:760px;margin:0 auto;padding:8px 0}.important{font-weight:700;letter-spacing:.3px;margin-bottom:10px}.pharmacy{line-height:1.25;margin-bottom:22px}.title{text-align:left;font-size:15pt;font-weight:700;margin:10px 0 24px}.date{text-align:right;margin-bottom:18px}.body p{margin:0 0 14px}.patient-name{font-weight:700}.script-table{width:100%;border-collapse:collapse;margin:18px 0 26px}.script-table td{border:0;padding:7px 0;vertical-align:top}.script-table td:first-child{width:68%;padding-right:20px}.script-table tr{border-bottom:1px solid #d5d5d5}.footer{margin-top:30px}.printbar{position:sticky;top:0;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:10px;margin-bottom:20px;display:flex;gap:10px;align-items:center}.printbar button{padding:9px 14px;border:0;border-radius:8px;background:#0f172a;color:white;cursor:pointer}@media print{.printbar{display:none}.page{max-width:none}}
-  </style></head><body><div class="printbar"><button onclick="window.print()">Print / Save as PDF</button><span>Only selected non-OK medicines are included.</span></div><div class="page">
-  <div class="important">IMPORTANT</div>
-  <div class="pharmacy"><b>Hibiscus Day and Night Pharmacy</b><br>Hibiscus Shopping Centre,<br>4/8 Leanyer Dr,<br>Leanyer NT 0812<br>(08) 8945 5955</div>
-  <div class="title">New Prescription Required</div>
-  <div class="date">${htmlEsc(dateDisplay(r.date))}</div>
-  <div class="body"><p>Dear Dr,</p>
-  <p>Our client, <span class="patient-name">${htmlEsc(r.patientFullName)}</span> is picking up monthly medication from us. The following prescriptions are due in the next two months:</p>
-  <table class="script-table"><tbody>${rows}</tbody></table>
-  ${r.note ? `<p><b>Note:</b> ${htmlEsc(r.note)}</p>` : ''}
-  <p>Kindly review and provide the prescription if it is appropriate. Thanks a lot.</p>
-  <p class="footer">Kind Regards,<br>Hibiscus Pharmacy</p></div></div></body></html>`;
+    @page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;font-size:8.5pt;line-height:1.15;background:#f3f4f6}.sheet{width:277mm;min-height:190mm;margin:0 auto 8mm;background:#fff;display:grid;grid-template-columns:1fr 1fr;gap:12mm;padding:7mm 5mm;break-after:page}.copy{min-width:0}.important{color:#f00;font-size:26pt;font-weight:700;line-height:1;margin-bottom:7mm}.pharmacy{font-size:7pt;line-height:1.05;margin-bottom:8mm}.title{font-size:12pt;font-weight:700;margin:0 0 9mm}.body p{margin:0 0 4mm}.patient-name{display:inline-block;min-width:45mm;border-bottom:1px solid #111;font-weight:700;text-align:center}.script-table{width:100%;border-collapse:collapse;table-layout:fixed;margin:6mm 0}.script-table td{border:1px solid #111;height:9mm;padding:1.5mm 2mm;vertical-align:middle;font-size:7.5pt;line-height:1.1;overflow-wrap:anywhere}.script-table td:first-child{width:56%}.note{font-size:7pt}.footer{margin-top:7mm}.printbar{position:sticky;top:0;z-index:2;background:#fff;border:1px solid #cbd5e1;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center}.printbar button{padding:9px 14px;border:0;border-radius:8px;background:#0f172a;color:white;cursor:pointer}@media print{body{background:#fff}.printbar{display:none}.sheet{margin:0;padding:0;min-height:auto;width:auto;gap:12mm}}
+  </style></head><body><div class="printbar"><button onclick="window.print()">Print / Save as PDF</button><span>Official pharmacy template · two copies per landscape page · only selected non-OK medicines.</span></div>${pages}</body></html>`;
 }
 app.get('/api/letter/:requestId', (req, res) => { const store = readStore(); const r = store.scriptRequests.find(x => x.id === req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.type('html').send(scriptLetterHtml(r)); });
 app.get('/api/letter/:requestId/pdf', (req, res) => {
@@ -1125,32 +1129,39 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
   if (!r) return res.status(404).send('Request not found');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="script-request-${String(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
-  const doc = new PDFDocument({ margin: 48, size: 'A4' });
+  const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'landscape' });
   doc.pipe(res);
-  doc.font('Helvetica-Bold').fontSize(18).text('Prescription / Repeat Request');
-  doc.moveDown(0.3);
-  doc.font('Helvetica').fontSize(11).text(`Patient: ${r.patientFullName}`);
-  doc.text(`Date: ${dateDisplay(r.date)}`);
-  doc.moveDown(1.2);
-  doc.text('Dear Doctor,');
-  doc.moveDown(0.7);
-  doc.text('Could you please provide updated prescriptions for the following regular packed medicines for this patient.');
-  doc.moveDown(1);
-  const startX = doc.x, widths = [205, 145, 70, 110];
-  function row(cols, header=false) {
-    const y = doc.y; const h = 34;
-    doc.font(header?'Helvetica-Bold':'Helvetica').fontSize(9);
-    let x = startX;
-    cols.forEach((c,i)=>{ doc.rect(x,y,widths[i],h).stroke(); doc.text(String(c ?? ''), x+4, y+5, { width: widths[i]-8, height: h-8 }); x += widths[i]; });
-    doc.y = y + h;
-    if (doc.y > 740) { doc.addPage(); }
+  const allItems = r.items || [];
+  const chunks = Array.from({ length: Math.max(1, Math.ceil(allItems.length / 8)) }, (_, index) => allItems.slice(index * 8, index * 8 + 8));
+  function drawCopy(x, chunk) {
+    const width = 360;
+    doc.fillColor('#ff0000').font('Helvetica-Bold').fontSize(26).text('IMPORTANT', x, 34, { width });
+    doc.fillColor('#111111').font('Helvetica').fontSize(7.5).text('Hibiscus Day and Night Pharmacy\n\nHibiscus Shopping Centre,\n\n4/8 Leanyer Dr,\n\nLeanyer NT 0812\n\n(08) 8945 5955', x, 78, { width, lineGap: 0 });
+    doc.font('Helvetica-Bold').fontSize(12).text('New Prescription Required', x, 174, { width });
+    doc.font('Helvetica').fontSize(9).text('Dear Dr,', x, 213, { width });
+    doc.fontSize(8.5).text(`Our client, ${r.patientFullName} is picking up monthly medication from us. The following is the prescription that are due in the next two months:`, x, 239, { width, height: 38 });
+    const tableY = 284, rowHeight = 26, medicineWidth = 215, detailWidth = width - medicineWidth;
+    for (let index = 0; index < 8; index += 1) {
+      const item = chunk[index];
+      const y = tableY + index * rowHeight;
+      doc.rect(x, y, medicineWidth, rowHeight).stroke('#111111');
+      doc.rect(x + medicineWidth, y, detailWidth, rowHeight).stroke('#111111');
+      if (!item) continue;
+      const reason = cleanText(item.status || item.requestFlag || 'New prescription required');
+      const repeats = cleanText(item.repeatsLeft ?? '');
+      const detail = reason === 'Script owing' ? 'Script owing' : (repeats !== '' ? `${repeats} repeat${repeats === '1' ? '' : 's'} left` : reason);
+      const medicine = cleanText(item.medicineName || item.drugDescription);
+      doc.font('Helvetica').fontSize(medicine.length > 55 ? 6.3 : 7.3).text(medicine, x + 5, y + 5, { width: medicineWidth - 10, height: rowHeight - 8 });
+      doc.fontSize(7.3).text(detail, x + medicineWidth + 5, y + 6, { width: detailWidth - 10, height: rowHeight - 8 });
+    }
+    doc.font('Helvetica').fontSize(8.5).text('Kindly review and provide the prescription if it is appropriate. Thanks a lot.', x, 505, { width });
+    doc.text('Kind Regards,\nHibiscus Pharmacy', x, 545, { width });
   }
-  row(['Medicine','Directions','Repeats','Request reason'], true);
-  (r.items || []).forEach(i => row([i.medicineName || i.drugDescription || '', i.directions || '', i.repeatsLeft ?? '', i.status || i.requestFlag || '']));
-  doc.moveDown(1);
-  if (r.note) { doc.font('Helvetica-Bold').text('Note:'); doc.font('Helvetica').text(r.note); doc.moveDown(1); }
-  doc.text('Kind regards,');
-  doc.text('Pharmacy team');
+  chunks.forEach((chunk, index) => {
+    if (index > 0) doc.addPage({ size:'A4', layout:'landscape', margin:0 });
+    drawCopy(40, chunk);
+    drawCopy(442, chunk);
+  });
   doc.end();
 });
 if (process.env.NODE_ENV !== 'test') {
@@ -1166,4 +1177,4 @@ if (process.env.NODE_ENV !== 'test') {
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, scriptLetterHtml };

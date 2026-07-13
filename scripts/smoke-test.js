@@ -2,7 +2,7 @@ import assert from 'assert';
 import fs from 'node:fs';
 import XLSX from 'xlsx';
 process.env.NODE_ENV = 'test';
-const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview } = await import('../server.js');
+const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, scriptLetterHtml } = await import('../server.js');
 
 assert.equal(dateDisplay('08/06/2026'), '08/06/2026');
 assert.equal(dateDisplay('2026-06-08'), '08/06/2026');
@@ -88,6 +88,16 @@ assert.equal(overview.length, 3);
 assert.equal(overview.filter(row => /RAMIPRIL/.test(row.medication)).length, 1);
 assert.ok(overview.some(row => row.overviewSource === 'Script list' && row.scriptNumber === '11'));
 assert.ok(overview.some(row => row.overviewSource === 'Medication list'));
+
+const officialLetter = scriptLetterHtml({
+  patientFullName: 'TEST, PATIENT',
+  items: [{ medicineName:'TEST MEDICINE', repeatsLeft:1, status:'Low repeats' }]
+});
+assert.match(officialLetter, /@page\{size:A4 landscape/);
+assert.equal((officialLetter.match(/class="important">IMPORTANT/g) || []).length, 2);
+assert.equal((officialLetter.match(/TEST MEDICINE/g) || []).length, 2);
+assert.match(officialLetter, /color:#f00/);
+assert.match(officialLetter, /two copies per landscape page/);
 
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
