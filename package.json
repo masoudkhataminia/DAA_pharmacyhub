@@ -8,8 +8,8 @@
     "start": "node --env-file=.env server.js",
     "dev": "node server.js",
     "mypak:patients": "node scripts/mypak-patient-list.js",
-    "test": "node scripts/smoke-test.js && node --test tests/mypak.test.js tests/mps.test.js",
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/mypak-patient-list.js && node --check services/mypak/client.js && node --check services/mypak/mapper.js && node --check services/mypak/packs.js && node --check services/mypak/sync.js && node --check services/doctor-change/analysis.js && node --check services/doctor-change/impact.js && node --check services/mps/client.js && node --check services/mps/mapper.js && node --check services/mps/offline.js && node --check services/mps/sync.js && node scripts/smoke-test.js && node --test tests/mypak.test.js tests/mps.test.js"
+    "test": "node scripts/smoke-test.js && node --test tests/gmail.test.js tests/mypak.test.js tests/mps.test.js",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/mypak-patient-list.js && node --check services/gmail.js && node --check services/mypak/client.js && node --check services/mypak/mapper.js && node --check services/mypak/packs.js && node --check services/mypak/sync.js && node --check services/doctor-change/analysis.js && node --check services/doctor-change/impact.js && node --check services/mps/client.js && node --check services/mps/mapper.js && node --check services/mps/offline.js && node --check services/mps/sync.js && node scripts/smoke-test.js && node --test tests/gmail.test.js tests/mypak.test.js tests/mps.test.js"
   },
   "dependencies": {
     "express": "^4.19.2",

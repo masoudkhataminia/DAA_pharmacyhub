@@ -18,11 +18,13 @@ import { MpsSyncService } from './services/mps/sync.js';
 import { publicMpsError } from './services/mps/errors.js';
 import { mergeMpsPatients } from './services/mps/mapper.js';
 import { mapOfflineMpsPatients } from './services/mps/offline.js';
+import { GmailService, validEmail } from './services/gmail.js';
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
+const GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-token.enc');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-premium-script-pdf-v2';
+const APP_BUILD_VERSION = '20260714-special-email-automation-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -52,7 +54,8 @@ const DEFAULT_STORE = {
     defaultSpecialOrderLeadDays: 14,
     urgentWindowDays: 2,
     dueSoonWindowDays: 7,
-    scriptLowRepeatThreshold: 1
+    scriptLowRepeatThreshold: 1,
+    pharmacyEmail: ''
   },
   patients: [],
   medications: [],
@@ -60,6 +63,7 @@ const DEFAULT_STORE = {
   scriptRequests: [],
   specialOrders: [],
   specialOrderRequests: [],
+  specialEmailLog: [],
   packRecords: [],
   doctorUpdates: [],
   doctorChangeAnalyses: [],
@@ -171,6 +175,8 @@ const mypakClient = new MyPakClient();
 const mypakSyncService = new MyPakSyncService({ client: mypakClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
 const mpsClient = new MpsClient();
 const mpsSyncService = new MpsSyncService({ client: mpsClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
+const gmailService = new GmailService({ clientId: process.env.GMAIL_CLIENT_ID, clientSecret: process.env.GMAIL_CLIENT_SECRET, redirectUri: process.env.GMAIL_REDIRECT_URI || 'https://daa.mypharmacyhub.net/api/gmail/callback', tokenFile: GMAIL_TOKEN_FILE, encryptionKey: process.env.GMAIL_TOKEN_KEY });
+const gmailOAuthStates = new Map();
 
 async function refreshPatientPackJobs(store, patient) {
   if (!patient?.mypakPatientId) return [];
@@ -199,6 +205,7 @@ const FIELD_ALIASES = {
   dob: ['DOB','Date of Birth','Birth Date','Patient DOB'],
   gender: ['Gender','Sex'],
   phone: ['Phone','Mobile','Contact Number','Contact','Telephone'],
+  email: ['Email','Email Address','Patient Email','E-mail'],
   address: ['Address','Residential Address','Street Address'],
   externalId: ['Patient ID','Patient No','Patient Number','ID','Number','Code','Customer ID'],
   group: ['Patient Group','Group','Category','Packing Group','Service Type'],
@@ -290,6 +297,7 @@ function buildPatient(wrap, settings) {
     dob: dateOrBlank(rowVal(r, FIELD_ALIASES.dob)),
     gender: cleanText(rowVal(r, FIELD_ALIASES.gender)),
     phone: cleanText(rowVal(r, FIELD_ALIASES.phone)),
+    email: cleanText(rowVal(r, FIELD_ALIASES.email)),
     address: cleanText(rowVal(r, FIELD_ALIASES.address)),
     patientGroup: group,
     packType: 'Webster/Sachet',
@@ -772,8 +780,91 @@ function specialOrdersComputed(store) {
     .map(o => computeSpecialOrder(o, store))
     .sort((a,b)=>(a.daysToOrder ?? 9999)-(b.daysToOrder ?? 9999) || a.patientFullName.localeCompare(b.patientFullName) || a.medicine.localeCompare(b.medicine));
 }
+function isS8Medication(row = {}) {
+  return /\b(s8|schedule\s*8|controlled)\b|methylphenidate|ritalin|dexamfetamine|dexamphetamine|vyvanse|lisdexamfetamine|oxycodone|morphine|fentanyl|tapentadol|buprenorphine|targin|panadeine\s+forte/i.test(`${row.schedule || ''} ${row.category || ''} ${row.medicine || row.medication || ''}`);
+}
+function scheduledSpecialOrders(store) {
+  // Every row in specialOrders was explicitly added/ticked by staff; S8 rows may also be promoted directly from MyPak.
+  return specialOrdersComputed(store).filter(order => isS8Medication(order) || order.isSpecialOrder !== false);
+}
+function specialOrderRecipients(order, store) {
+  const patient = (store.patients || []).find(row => row.id === order.patientId);
+  const candidates = [
+    order.sendToPatient ? cleanText(order.patientEmail || patient?.email) : '',
+    order.sendToDoctor ? cleanText(order.doctorEmail) : '',
+    order.sendToPharmacy ? cleanText(store.settings?.pharmacyEmail) : ''
+  ];
+  return [...new Set(candidates.filter(validEmail).map(email => email.toLowerCase()))];
+}
+function nextSpecialEmailAt(dateValue, fallback = '') {
+  if (!dateValue) return fallback;
+  const date = parseDate(dateValue);
+  if (!date) return fallback;
+  date.setHours(8, 0, 0, 0);
+  return date.toISOString();
+}
+function specialOrderEmail(order) {
+  const subject = `Special order reminder — ${cleanText(order.patientFullName)} — ${cleanText(order.medicine)}`;
+  const details = [
+    ['Patient', order.patientFullName], ['Medicine', order.medicine], ['Strength', order.strength], ['Directions', order.directions],
+    ['Source', order.source], ['Next pickup', order.nextPickupDisplay], ['Order due', order.orderDueDisplay]
+  ].filter(([, value]) => cleanText(value));
+  const rows = details.map(([label, value]) => `<tr><td style="padding:8px 12px;color:#667085;border-bottom:1px solid #e5e7eb">${htmlEsc(label)}</td><td style="padding:8px 12px;font-weight:700;border-bottom:1px solid #e5e7eb">${htmlEsc(value)}</td></tr>`).join('');
+  const html = `<div style="font-family:Arial,sans-serif;color:#132238;max-width:640px"><div style="border-top:8px solid #c81e35;padding:24px"><p style="color:#c81e35;font-weight:800;letter-spacing:.08em">HIBISCUS PHARMACY</p><h2>Special medication order reminder</h2><p>Please review the following scheduled S8 / special order.</p><table style="width:100%;border-collapse:collapse;background:#f8fafc">${rows}</table>${order.notes ? `<p><b>Notes:</b> ${htmlEsc(order.notes)}</p>` : ''}<p style="margin-top:28px">Kind regards,<br><b>Hibiscus Day and Night Pharmacy</b><br>(08) 8945 5955</p><p style="font-size:11px;color:#667085">This reminder was sent automatically from the pharmacy’s Special Orders schedule.</p></div></div>`;
+  return { subject, html };
+}
+function shouldSendSpecialOrderEmail(order, now = new Date()) {
+  if (!order.emailAutomationEnabled || order.active === false || /received|complete|cancelled/i.test(order.status || '')) return false;
+  const due = new Date(order.nextEmailAt || '');
+  const retry = new Date(order.emailRetryAfter || 0);
+  return !Number.isNaN(due.getTime()) && due <= now && (Number.isNaN(retry.getTime()) || retry <= now);
+}
+let specialEmailSchedulerRunning = false;
+async function processSpecialOrderEmailSchedules({ gmail = gmailService, now = new Date(), read = readStore, write = writeStore } = {}) {
+  if (specialEmailSchedulerRunning) return { skipped: true, reason: 'already_running' };
+  specialEmailSchedulerRunning = true;
+  let sent = 0, failed = 0;
+  try {
+    if (!gmail.status().connected) return { skipped: true, reason: 'gmail_not_connected' };
+    const store = read();
+    const due = scheduledSpecialOrders(store).filter(order => shouldSendSpecialOrderEmail(order, now));
+    for (const computed of due) {
+      const order = store.specialOrders.find(row => row.id === computed.id);
+      if (!order) continue;
+      const recipients = specialOrderRecipients(order, store);
+      if (!recipients.length) {
+        order.lastEmailError = 'No valid selected recipient email';
+        order.emailRetryAfter = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+        failed++;
+        continue;
+      }
+      try {
+        const message = specialOrderEmail(computed);
+        for (const recipient of recipients) await gmail.send({ to: recipient, ...message });
+        order.lastEmailSentAt = now.toISOString();
+        order.lastEmailError = '';
+        order.emailRetryAfter = '';
+        order.emailSendCount = Number(order.emailSendCount || 0) + 1;
+        const next = new Date(now); next.setDate(next.getDate() + Math.max(1, num(order.emailIntervalDays, 14)));
+        order.nextEmailAt = next.toISOString();
+        store.specialEmailLog.unshift({ id:id(), orderId:order.id, patientFullName:order.patientFullName, medicine:order.medicine, recipientCount:recipients.length, status:'Sent', at:now.toISOString() });
+        audit(store, 'Sent automatic special order email', { orderId:order.id, patient:order.patientFullName, medicine:order.medicine, recipientCount:recipients.length });
+        sent++;
+      } catch (error) {
+        order.lastEmailError = cleanText(error.message).slice(0, 300);
+        order.emailRetryAfter = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+        store.specialEmailLog.unshift({ id:id(), orderId:order.id, patientFullName:order.patientFullName, medicine:order.medicine, recipientCount:recipients.length, status:'Failed', error:order.lastEmailError, at:now.toISOString() });
+        audit(store, 'Automatic special order email failed', { orderId:order.id, error:order.lastEmailError });
+        failed++;
+      }
+    }
+    store.specialEmailLog = (store.specialEmailLog || []).slice(0, 500);
+    if (due.length) write(store);
+    return { sent, failed, checked: due.length };
+  } finally { specialEmailSchedulerRunning = false; }
+}
 function specialDashboard(store) {
-  const list = specialOrdersComputed(store);
+  const list = scheduledSpecialOrders(store);
   return list.filter(o => !/received|complete|cancelled/i.test(o.status || '') && (o.daysToOrder === null || o.daysToOrder <= 14));
 }
 function findPatientByNames(store, first, last, fullName='') {
@@ -886,7 +977,11 @@ function seedSpecialOrders(store) {
 function specialOrderPayload(body, store, existing={}) {
   const p = store.patients.find(x => x.id === (body.patientId || existing.patientId));
   if (!p) throw new Error('Patient not found for special order');
-  return {
+  const emailAutomationEnabled = body.emailAutomationEnabled === undefined ? Boolean(existing.emailAutomationEnabled) : Boolean(body.emailAutomationEnabled);
+  const patientEmail = cleanText(body.patientEmail ?? existing.patientEmail ?? p.email);
+  const doctorEmail = cleanText(body.doctorEmail ?? existing.doctorEmail);
+  const nextEmailAt = nextSpecialEmailAt(body.nextEmailDate, existing.nextEmailAt || '');
+  const payload = {
     ...existing,
     patientId: p.id,
     patientFullName: p.fullName,
@@ -900,10 +995,27 @@ function specialOrderPayload(body, store, existing={}) {
     orderLeadDays: num(body.orderLeadDays ?? existing.orderLeadDays ?? store.settings.defaultSpecialOrderLeadDays, store.settings.defaultSpecialOrderLeadDays),
     status: cleanText(body.status ?? existing.status ?? 'Not ordered'),
     notes: cleanText(body.notes ?? existing.notes),
+    isSpecialOrder: true,
+    patientEmail,
+    doctorEmail,
+    sendToPatient: body.sendToPatient === undefined ? Boolean(existing.sendToPatient) : Boolean(body.sendToPatient),
+    sendToDoctor: body.sendToDoctor === undefined ? Boolean(existing.sendToDoctor) : Boolean(body.sendToDoctor),
+    sendToPharmacy: body.sendToPharmacy === undefined ? (existing.sendToPharmacy !== false) : Boolean(body.sendToPharmacy),
+    emailAutomationEnabled,
+    emailIntervalDays: Math.max(1, num(body.emailIntervalDays ?? existing.emailIntervalDays, 14)),
+    nextEmailAt,
     followPatientCycle: body.followPatientCycle === undefined ? (existing.followPatientCycle !== false && !body.lastPickupDate) : !!body.followPatientCycle,
     active: body.active === undefined ? (existing.active !== false) : !!body.active,
     updatedAt: nowISO()
   };
+  if (emailAutomationEnabled) {
+    if (!nextEmailAt) throw new Error('Choose the first automatic email date');
+    if (payload.sendToPatient && !validEmail(patientEmail)) throw new Error('Patient email is missing or invalid');
+    if (payload.sendToDoctor && !validEmail(doctorEmail)) throw new Error('Doctor email is missing or invalid');
+    if (payload.sendToPharmacy && !validEmail(store.settings?.pharmacyEmail)) throw new Error('Pharmacy email is missing or invalid in Settings');
+    if (!payload.sendToPatient && !payload.sendToDoctor && !payload.sendToPharmacy) throw new Error('Select at least one automatic email recipient');
+  }
+  return payload;
 }
 function specialOrderLetterHtml(r) {
   const rows = (r.items || []).map(i => `<tr><td>${htmlEsc(i.patientFullName)}</td><td>${htmlEsc(i.medicine)}</td><td>${htmlEsc(i.strength || '')}</td><td>${htmlEsc(i.directions || '')}</td><td>${htmlEsc(i.source || '')}</td><td>${htmlEsc(i.nextPickupDisplay || '')}</td><td>${htmlEsc(i.orderDueDisplay || '')}</td></tr>`).join('');
@@ -925,7 +1037,7 @@ function buildState(store) {
     ...publicStore
   } = store;
   const sortPatients = rows => rows.sort((a,b)=>(a.daysToPickup ?? 9999)-(b.daysToPickup ?? 9999)||a.fullName.localeCompare(b.fullName));
-  return { ...publicStore, patientsComputed: sortPatients(activeComputed(store)), allPatientsComputed: sortPatients(store.patients.map(p => computePatient(p, store.settings))), dispenseQueue: dispenseQueue(store), specialOrdersComputed: specialOrdersComputed(store), dashboard: dashboard(store) };
+  return { ...publicStore, patientsComputed: sortPatients(activeComputed(store)), allPatientsComputed: sortPatients(store.patients.map(p => computePatient(p, store.settings))), dispenseQueue: dispenseQueue(store), specialOrdersComputed: scheduledSpecialOrders(store), dashboard: dashboard(store) };
 }
 function importPatients(buffer, filename) {
   const store = readStore(); const rows = workbookRows(buffer);
@@ -944,7 +1056,9 @@ function importPatients(buffer, filename) {
     if (old) {
       const preserve = ['id','createdAt','lastPickupDate','cycleDays','packLeadDays','dispenseLeadDays','orderLeadDays','packStatus','dispenseStatus','medicineOrderStatus','scriptRequestStatus','patientSuppliedMeds','s8Priority','urgent','notes'];
       const keep = Object.fromEntries(preserve.map(k => [k, old[k]]));
+      const existingEmail = old.email;
       Object.assign(old, p, keep, { updatedAt: nowISO(), active: true });
+      if (!old.email) old.email = existingEmail || '';
       updated++;
       reviews.push({ id: id(), type: 'patient', fullName: old.fullName, result: 'Updated existing', severity: 'ok', action: 'Preserved workflow settings; refreshed demographic/source data', source: `${p.sourceSheet}:${p.sourceRow}`, at: nowISO() });
     } else {
@@ -1074,19 +1188,53 @@ app.post('/api/mps/import/patients', upload.single('file'), (req, res) => {
 app.patch('/api/dispense-workflow/:key', (req, res) => { const allowed = ['needs_dispense','dispensed','confirmed']; const status = cleanText(req.body.status); if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid dispense status' }); const store = readStore(); store.dispenseWorkflow[req.params.key] = { status, updatedAt: nowISO() }; audit(store, 'Updated dispense workflow', { key: req.params.key, status }); writeStore(store); res.json(store.dispenseWorkflow[req.params.key]); });
 app.get('/api/export/store', (_, res) => res.download(DATA_FILE, `webster-pack-backup-${toISODate(todayDate())}.json`));
 app.post('/api/reset', (req, res) => { const store = clone(DEFAULT_STORE); audit(store, 'Reset store', { reason: req.body?.reason || 'manual reset' }); writeStore(store); res.json({ ok: true }); });
+app.get('/api/gmail/status', (_, res) => res.json(gmailService.status()));
+app.get('/api/gmail/connect', (req, res) => {
+  try {
+    const state = crypto.randomBytes(24).toString('hex');
+    gmailOAuthStates.set(state, Date.now() + 10 * 60 * 1000);
+    res.redirect(gmailService.authorizationUrl(state));
+  } catch (error) { res.status(503).send(htmlEsc(error.message)); }
+});
+app.get('/api/gmail/callback', async (req, res) => {
+  const expiresAt = gmailOAuthStates.get(String(req.query.state || ''));
+  gmailOAuthStates.delete(String(req.query.state || ''));
+  if (!expiresAt || expiresAt < Date.now()) return res.status(400).send('Gmail connection expired or was not started from this portal.');
+  if (req.query.error) return res.redirect('/?gmail=denied#settings');
+  try {
+    await gmailService.exchangeCode(cleanText(req.query.code));
+    res.redirect('/?gmail=connected#settings');
+  } catch (error) { res.status(400).send(`Gmail connection failed: ${htmlEsc(error.message)}`); }
+});
+app.post('/api/gmail/disconnect', (_, res) => { gmailService.clear(); res.json(gmailService.status()); });
+app.post('/api/gmail/test', async (req, res) => {
+  try {
+    const store = readStore();
+    const to = cleanText(req.body?.email || store.settings?.pharmacyEmail);
+    if (!validEmail(to)) return res.status(400).json({ error:'Set a valid pharmacy email first' });
+    await gmailService.send({ to, subject:'DAA Pharmacy Hub Gmail test', html:'<p>Gmail is connected successfully.</p><p><b>Hibiscus Pharmacy</b></p>' });
+    res.json({ ok:true, to });
+  } catch (error) { res.status(400).json({ error:cleanText(error.message) }); }
+});
+app.post('/api/special-orders/run-email-scheduler', async (_, res) => { try { res.json(await processSpecialOrderEmailSchedules()); } catch (error) { res.status(400).json({ error:cleanText(error.message) }); } });
+app.post('/api/email-settings', (req, res) => {
+  const store = readStore(); const pharmacyEmail = cleanText(req.body?.pharmacyEmail);
+  if (pharmacyEmail && !validEmail(pharmacyEmail)) return res.status(400).json({ error:'Enter a valid pharmacy email' });
+  store.settings.pharmacyEmail = pharmacyEmail; audit(store, 'Updated pharmacy email settings', { configured:Boolean(pharmacyEmail) }); writeStore(store); res.json({ pharmacyEmail });
+});
 app.post('/api/settings', (req, res) => { const store = readStore(); store.settings = { ...store.settings, ...req.body }; audit(store, 'Updated settings', req.body); writeStore(store); res.json(buildState(store)); });
 app.post('/api/import/patients', upload.single('file'), (req, res) => { try { if (!req.file) throw new Error('No file uploaded'); res.json(importPatients(req.file.buffer, req.file.originalname)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/import/medications', upload.single('file'), (req, res) => { try { if (!req.file) throw new Error('No file uploaded'); const store = readStore(); const rows = workbookRows(req.file.buffer); const meds = rows.map(buildMedication).filter(Boolean); store.medications = meds; linkPatientFlags(store); audit(store, 'Imported medication list', { filename: req.file.originalname, rows: rows.length, medications: meds.length }); writeStore(store); res.json({ rows: rows.length, medications: meds.length }); } catch(e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/import/scripts', upload.single('file'), (req, res) => { try { if (!req.file) throw new Error('No file uploaded'); const store = readStore(); const result = scriptRowsFast(req.file.buffer, store.settings, store); store.scripts = result.scripts; linkPatientFlags(store); const issues = store.scripts.filter(s=>s.requestFlag!=='OK').length; audit(store, 'Imported scripts list', { filename: req.file.originalname, rows: result.totalRows, parsed: result.parsed, matched: result.matched, scripts: store.scripts.length, issues, skippedNoNameOrDrug: result.skippedNoNameOrDrug, skippedNonMedicine: result.skippedNonMedicine }); writeStore(store); res.json({ rows: result.totalRows, parsed: result.parsed, matched: result.matched, scripts: store.scripts.length, issues, skippedNonMedicine: result.skippedNonMedicine }); } catch(e) { console.error(e); res.status(400).json({ error: e.message }); } });
 
 app.post('/api/import/pack-record', upload.single('file'), (req, res) => { try { if (!req.file) throw new Error('No file uploaded'); res.json(importPackRecord(req.file.buffer, req.file.originalname)); } catch(e) { console.error(e); res.status(400).json({ error: e.message }); } });
-app.post('/api/special-orders', (req, res) => { try { const store = readStore(); const order = { id:id(), createdAt:nowISO(), ...specialOrderPayload(req.body, store) }; store.specialOrders.unshift(order); const p = store.patients.find(x=>x.id===order.patientId); if (/s8|vyvanse|targin|diazepam|panadeine|methylphenidate|ritalin/i.test(`${order.category} ${order.medicine}`)) p.s8Priority = true; audit(store, 'Added special order', { patient: order.patientFullName, medicine: order.medicine, source: order.source }); writeStore(store); res.json(computeSpecialOrder(order, store)); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.post('/api/special-orders', (req, res) => { try { const store = readStore(); const existing = store.specialOrders.find(o => o.patientId === req.body.patientId && normalizeName(o.medicine) === normalizeName(req.body.medicine)); if (existing) return res.json(computeSpecialOrder(existing, store)); const order = { id:id(), createdAt:nowISO(), ...specialOrderPayload(req.body, store) }; store.specialOrders.unshift(order); const p = store.patients.find(x=>x.id===order.patientId); if (isS8Medication(order)) p.s8Priority = true; audit(store, 'Added special order', { patient: order.patientFullName, medicine: order.medicine, source: order.source }); writeStore(store); res.json(computeSpecialOrder(order, store)); } catch(e) { res.status(400).json({ error: e.message }); } });
 app.patch('/api/special-orders/:id', (req, res) => { try { const store = readStore(); const old = store.specialOrders.find(x=>x.id===req.params.id); if (!old) return res.status(404).json({ error:'Special order not found' }); const updated = specialOrderPayload(req.body, store, old); Object.assign(old, updated); audit(store, 'Updated special order', { patient: old.patientFullName, medicine: old.medicine, status: old.status }); writeStore(store); res.json(computeSpecialOrder(old, store)); } catch(e) { res.status(400).json({ error:e.message }); } });
 app.post('/api/special-order-request', (req, res) => { const store = readStore(); const ids = Array.isArray(req.body.orderIds) ? req.body.orderIds : []; const selected = specialOrdersComputed(store).filter(o => ids.includes(o.id)); if (!selected.length) return res.status(400).json({ error:'No special orders selected' }); const request = { id:id(), date:toISODate(todayDate()), recipient:cleanText(req.body.recipient || 'External supplier / prescriber'), mode:cleanText(req.body.mode || 'external'), note:cleanText(req.body.note), status:'Draft', items:selected, createdAt:nowISO() }; store.specialOrderRequests.unshift(request); for (const o of store.specialOrders) if (ids.includes(o.id) && !/received|complete/i.test(o.status || '')) o.status = 'Request generated'; audit(store, 'Created special order request', { itemCount:selected.length, recipient:request.recipient }); writeStore(store); res.json(request); });
 app.get('/api/special-order-letter/:requestId', (req, res) => { const store = readStore(); const r = store.specialOrderRequests.find(x=>x.id===req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.type('html').send(specialOrderLetterHtml(r)); });
 app.get('/api/special-order-letter/:requestId/pdf', (req, res) => { const store = readStore(); const r = store.specialOrderRequests.find(x=>x.id===req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.setHeader('Content-Type','application/pdf'); res.setHeader('Content-Disposition', `inline; filename="special-order-request-${r.date}.pdf"`); const doc = new PDFDocument({ margin: 36, size: 'A4' }); doc.pipe(res); doc.font('Helvetica-Bold').fontSize(14).text('Hibiscus Day and Night Pharmacy'); doc.font('Helvetica').fontSize(10).text('Hibiscus Shopping Centre, 4/8 Leanyer Dr, Leanyer NT 0812'); doc.text('(08) 8945 5955'); doc.moveDown(); doc.font('Helvetica-Bold').fontSize(16).text(r.mode === 'internal' ? 'Special Order Checklist' : 'Special Medication / Prescription Request'); doc.font('Helvetica').fontSize(10).text(`Date: ${dateDisplay(r.date)}`); doc.text(`Recipient: ${r.recipient || 'External supplier / prescriber'}`); doc.moveDown(); doc.text('Please review/provide the following medicines required for upcoming Webster/sachet packs where appropriate.'); doc.moveDown(); const startX=doc.x, widths=[95,130,70,85,65,65]; function row(cols, header=false){ const y=doc.y; const h=38; doc.font(header?'Helvetica-Bold':'Helvetica').fontSize(8); let x=startX; cols.forEach((c,i)=>{ doc.rect(x,y,widths[i],h).stroke(); doc.text(String(c??''),x+3,y+4,{width:widths[i]-6,height:h-8}); x+=widths[i]; }); doc.y=y+h; if(doc.y>735) doc.addPage(); } row(['Patient','Medicine','Strength','Source','Next pickup','Order due'], true); (r.items||[]).forEach(i=>row([i.patientFullName, i.medicine, i.strength||'', i.source||'', i.nextPickupDisplay||'', i.orderDueDisplay||''])); if(r.note){ doc.moveDown(); doc.font('Helvetica-Bold').text('Note:'); doc.font('Helvetica').text(r.note); } doc.moveDown(); doc.text('Kind Regards,'); doc.text('Hibiscus Pharmacy'); doc.end(); });
 
-app.patch('/api/patients/:id', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const before = clone(p); const allowed = ['fullName','firstName','lastName','dob','phone','address','cycleDays','lastPickupDate','packLeadDays','dispenseLeadDays','orderLeadDays','packStatus','dispenseStatus','medicineOrderStatus','scriptRequestStatus','patientSuppliedMeds','s8Priority','urgent','notes','active','packType']; for (const k of allowed) if (k in req.body) p[k] = req.body[k]; p.lastPickupDate = dateOrBlank(p.lastPickupDate); p.matchKey = matchKeyFor(p); p.updatedAt = nowISO(); audit(store, 'Updated patient', { patient: p.fullName, before, after: p }); writeStore(store); res.json(computePatient(p, store.settings)); });
+app.patch('/api/patients/:id', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const before = clone(p); const allowed = ['fullName','firstName','lastName','dob','phone','email','address','cycleDays','lastPickupDate','packLeadDays','dispenseLeadDays','orderLeadDays','packStatus','dispenseStatus','medicineOrderStatus','scriptRequestStatus','patientSuppliedMeds','s8Priority','urgent','notes','active','packType']; for (const k of allowed) if (k in req.body) p[k] = req.body[k]; p.lastPickupDate = dateOrBlank(p.lastPickupDate); p.email = cleanText(p.email); if (p.email && !validEmail(p.email)) return res.status(400).json({ error:'Patient email is invalid' }); p.matchKey = matchKeyFor(p); p.updatedAt = nowISO(); audit(store, 'Updated patient', { patient: p.fullName, before, after: p }); writeStore(store); res.json(computePatient(p, store.settings)); });
 app.get('/api/patients/:id/details', (req, res) => {
   const store = readStore();
   const p = store.patients.find(x => x.id === req.params.id);
@@ -1357,6 +1505,8 @@ if (process.env.NODE_ENV !== 'test') {
     return hour >= syncStartHour && hour < syncEndHour;
   };
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
+  setTimeout(() => processSpecialOrderEmailSchedules().catch(() => {}), 5000).unref();
+  setInterval(() => processSpecialOrderEmailSchedules().catch(() => {}), 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, isS8Medication, specialOrderRecipients, shouldSendSpecialOrderEmail, processSpecialOrderEmailSchedules, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf };

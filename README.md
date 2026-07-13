@@ -38,3 +38,17 @@ See `docs/MPS_CONNECTOR.md` for setup, supported endpoints and safety constraint
 - Compares a pasted doctor email or uploaded medication summary with the patient's current MyPak medication list when the private OpenAI API key is configured.
 - Requires a pharmacist to approve or reject every proposed change.
 - Produces a printable amendment worksheet listing the exact pack, date, day, dose compartment and quantity to add/remove/change, with packer and checker sign-off.
+
+## Gmail automatic S8 / Special Order reminders
+
+- The Special Orders page only uses medicines identified as S8 and medicines explicitly added to the Special Orders queue.
+- Each order can send on its own interval (for example every 10 or 20 days) to the patient, doctor and/or pharmacy. Each recipient is sent a separate message.
+- The server checks due schedules every minute, even when no browser is open. Completed, received and cancelled orders do not send.
+- Patient email can be imported or edited in Patient master. Doctor email can be selected/entered on the Special Order. The pharmacy recipient is configured under Settings.
+- Gmail uses the narrow `gmail.send` OAuth scope and offline access. The refresh token is AES-256-GCM encrypted in `data/gmail-token.enc`, which is ignored by Git.
+
+Create a Google OAuth Web application, enable the Gmail API, and register this exact authorised redirect URI:
+
+`https://daa.mypharmacyhub.net/api/gmail/callback`
+
+Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REDIRECT_URI` and a long random `GMAIL_TOKEN_KEY` in the server `.env`, restart the process, then use **Settings → Connect Gmail**.

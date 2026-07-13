@@ -40,10 +40,11 @@ function matches(row, patients) {
 }
 
 function demographics(row, at) {
+  const email = text(row.email || row.emailAddress);
   return {
     mypakPatientId: text(row.patientId), mypakPatientGroupId: text(row.patientGroupId), mypakExternalPatientId: text(row.externalPatientId),
     externalId: text(row.externalPatientId), firstName: text(row.firstName), lastName: text(row.lastName), fullName: fullName(row),
-    dob: isoDate(row.dob), gender: text(row.gender), address: text(row.address), phone: text(row.phone), patientGroup: text(row.patientGroupName),
+    dob: isoDate(row.dob), gender: text(row.gender), address: text(row.address), phone: text(row.phone), ...(email ? { email } : {}), patientGroup: text(row.patientGroupName),
     mypakPackingStatus: row.packingStatus ?? null, mypakPatientStatus: row.patientStatus ?? null, dispenseCode: text(row.dispenseCode), room: text(row.room),
     facilityWard: text(row.facilityWard), distribution: row.distribution ?? null, daaFunding: row.daaFunding ?? null, packingStream: 'WP', packType: 'Webster Pack', lastMyPakSyncAt: at,
     myPakRawVersion: 1, mypakMetadata: { visionImpaired: Boolean(row.visionImpaired), days30Dispensing: Boolean(row.days30Dispensing), lastCheckedDate: row.lastCheckedDate || null, photoId: row.photoId || null }

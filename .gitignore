@@ -11,3 +11,4 @@ build
 data/store.json
 data/mypak-*.json
 data/mps-*.json
+data/gmail-token.enc
