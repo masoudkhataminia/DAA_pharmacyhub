@@ -56,7 +56,8 @@ function patientDemographics(p){
   return `<h3>Patient information</h3><table><tbody>${fields.map(([label,value])=>`<tr><th>${esc(label)}</th><td>${esc(patientValue(value))}</td></tr>`).join('')}</tbody></table>`;
 }
 function myPakMedicationBalances(rows){
-  return rows?.length ? `<table><thead><tr><th>Medication</th><th>Directions</th><th>Current balance</th><th>Required / week</th><th>Repeats</th><th>Script</th><th>Last update</th></tr></thead><tbody>${rows.map(m=>`<tr><td><b>${esc(m.medication||'—')}</b><br><small>${esc(m.drugCode||'')}</small></td><td>${esc(m.direction||'—')}</td><td>${esc(patientValue(m.balanceQty))}</td><td>${esc(patientValue(m.weeklyQty))}</td><td>${esc(patientValue(m.repeatsLeft))}</td><td>${m.newScriptNeeded===true?badge('New script needed','warn'):m.newScriptNeeded===false?badge('OK','ok'):'—'}</td><td>${esc(m.lastDispenseBalanceUpdated ? new Date(m.lastDispenseBalanceUpdated).toLocaleString() : '—')}</td></tr>`).join('')}</tbody></table>` : empty('No MyPak medication balance is available for this patient.');
+  const scriptState = m => m.owing ? badge('OWING','danger') : m.requestFlag==='New script required' ? badge('New script required','warn') : m.requestFlag==='Low repeats' ? badge('Low repeats','warn') : m.requestFlag==='OK' ? badge('OK','ok') : m.newScriptNeeded===true ? badge('New script needed','warn') : m.newScriptNeeded===false ? badge('OK','ok') : '—';
+  return rows?.length ? `<table><thead><tr><th>Medication</th><th>Directions</th><th>Current balance</th><th>Required / week</th><th>Repeats</th><th>Script</th><th>Last update</th></tr></thead><tbody>${rows.map(m=>`<tr><td><b>${esc(m.medication||'—')}</b><br><small>${esc(m.drugCode||'')}</small></td><td>${esc(m.direction||'—')}</td><td>${esc(patientValue(m.balanceQty))}</td><td>${esc(patientValue(m.weeklyQty))}</td><td><b>${esc(patientValue(m.repeatsLeft))}</b>${m.repeatSource?`<br><small>${esc(m.repeatSource)}</small>`:''}</td><td>${scriptState(m)}${m.scriptNumber?`<br><small>Script ${esc(m.scriptNumber)}</small>`:''}</td><td>${esc(m.lastDispenseBalanceUpdated ? new Date(m.lastDispenseBalanceUpdated).toLocaleString() : '—')}</td></tr>`).join('')}</tbody></table>` : empty('No MyPak medication balance is available for this patient.');
 }
 function renderImportReview(){
   const rows = STATE.importReviews || [];
@@ -166,7 +167,7 @@ async function buildRequestForPatient(id){
     const key = norm(m.medication); if(!key) continue;
     const negative = Number(m.balanceQty) < 0 || m.isInsufficientPillBalance;
     const noScript = m.newScriptNeeded === true;
-    byMed.set(key,{ prescriptionId:m.prescriptionId, medicineName:m.medication, directions:m.direction||'', timing:`Balance ${patientValue(m.balanceQty)} · weekly ${patientValue(m.weeklyQty)}`, repeatsLeft:m.repeatsLeft??'', status:m.requestStatus==='requested'?'Requested':negative&&noScript?'No script / negative balance':negative?'Negative balance':noScript?'New script required':'OK', source:'MyPak prescription', drugCode:m.drugCode||'' });
+    byMed.set(key,{ prescriptionId:m.prescriptionId, medicineName:m.medication, directions:m.direction||'', timing:`Balance ${patientValue(m.balanceQty)} · weekly ${patientValue(m.weeklyQty)}`, repeatsLeft:m.repeatsLeft??'', status:m.requestStatus==='requested'?'Requested':m.requestFlag||(negative&&noScript?'No script / negative balance':negative?'Negative balance':noScript?'New script required':'OK'), source:m.repeatSource?'MyPak prescription + imported script':'MyPak prescription', drugCode:m.drugCode||'', owing:!!m.owing, scriptNumber:m.scriptNumber||'' });
   }
   for (const m of d.medicationBalances || []) {
     const key = norm(m.medication);
@@ -176,7 +177,7 @@ async function buildRequestForPatient(id){
     const status = m.newScriptNeeded === true ? 'New script required' : lowRepeats ? 'Low repeats' : 'OK';
     const balance = `MyPak balance ${patientValue(m.balanceQty)} · required/week ${patientValue(m.weeklyQty)}`;
     const existing = byMed.get(key);
-    byMed.set(key, existing ? { ...existing, directions: existing.directions || m.direction || '', timing: balance, repeatsLeft: existing.repeatsLeft ?? repeats, status: /^(OK)$/i.test(existing.status) ? status : existing.status, source: 'MyPak prescription + balance' } : { medicineName: m.medication, directions: m.direction || '', timing: balance, repeatsLeft: repeats, status, source: 'MyPak live balance', drugCode: m.drugCode || '' });
+    byMed.set(key, existing ? { ...existing, directions: existing.directions || m.direction || '', timing: balance, repeatsLeft: repeatPosition(existing.repeatsLeft)===null?repeats:existing.repeatsLeft, status: m.requestFlag||(/^(OK)$/i.test(existing.status) ? status : existing.status), source: m.repeatSource?'MyPak prescription + imported script':'MyPak prescription + balance', owing:!!m.owing||!!existing.owing, scriptNumber:m.scriptNumber||existing.scriptNumber||'' } : { medicineName: m.medication, directions: m.direction || '', timing: balance, repeatsLeft: repeats, status:m.requestFlag||status, source:m.repeatSource?'MyPak + imported script':'MyPak live balance', drugCode: m.drugCode || '', owing:!!m.owing, scriptNumber:m.scriptNumber||'' });
   }
   for (const m of d.medications || []) {
     const key = norm(m.medicineName);
@@ -188,14 +189,14 @@ async function buildRequestForPatient(id){
     byMed.set(key, existing);
   }
   for (const s of d.scripts || []) {
-    const key = norm(s.drugDescription);
+    const key = norm(s.matchedMedication || s.drugDescription);
     if (!key) continue;
     const existing = byMed.get(key) || { medicineName: s.drugDescription, directions: '', timing: '', source: 'Script list' };
     existing.repeatsLeft = s.repeatsLeft ?? '';
     existing.status = s.requestFlag || 'Manual request';
     existing.owing = !!s.owing;
     existing.scriptNumber = s.scriptNumber || '';
-    existing.source = existing.source === 'Medication list' ? 'Medication + script' : 'Script list';
+    existing.source = s.matchedMedication ? 'MyPak + imported script' : existing.source === 'Medication list' ? 'Medication + script' : 'Script list';
     byMed.set(key, existing);
   }
   const latestDispense = new Map();

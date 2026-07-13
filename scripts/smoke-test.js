@@ -2,7 +2,7 @@ import assert from 'assert';
 import fs from 'node:fs';
 import XLSX from 'xlsx';
 process.env.NODE_ENV = 'test';
-const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast } = await import('../server.js');
+const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances } = await import('../server.js');
 
 assert.equal(dateDisplay('08/06/2026'), '08/06/2026');
 assert.equal(dateDisplay('2026-06-08'), '08/06/2026');
@@ -43,10 +43,30 @@ assert.equal(matchedScripts.scripts.length, 1);
 assert.equal(matchedScripts.scripts[0].patientNameKey, normalizeName('ALUM(KDH), PRISCILLA'));
 assert.equal(matchedScripts.scripts[0].repeatsLeft, 4);
 
+const linkedRepeats = linkScriptsToMedicationBalances([
+  { medication: 'AMLODIPINE - AMLODIPINE (APO) 10mg TAB (AMAP2)', drugCode: 'AMAP2' },
+  { medication: 'CALCITRIOL - CALITROL 0.25mcg CAP (CALI2)', drugCode: 'CALI2' },
+  { medication: 'Magnesium - MAG TAB 500mg TAB (MYPA036)', drugCode: 'MYPA036' },
+  { medication: 'PRAZOSIN - MINIPRESS 2mg (as HCL) TAB (MIN2)', drugCode: 'MIN2' },
+  { medication: 'RAMIPRIL - RAMIPRIL (APO) 5mg TAB (APOR3)', drugCode: 'APOR3' },
+  { medication: 'SEVELAMER CARBONATE - SEVELAMER (APOTEX) 800mg TAB (SEVE3)', drugCode: 'SEVE3' }
+], [
+  { drugDescription: 'AMLODIPINE (APO) TABLETS 10mg Bottle', repeatsLeft: 3, requestFlag: 'OK', scriptNumber: '1' },
+  { drugDescription: 'CALITROL CAPSULES 0.25mcg', repeatsLeft: 1, requestFlag: 'Low repeats', scriptNumber: '2' },
+  { drugDescription: 'MAG-SUP TABLETS 500mg', repeatsLeft: 2, requestFlag: 'OK', scriptNumber: '3' },
+  { drugDescription: 'MINIPRESS TABLETS 2mg (as HCL)', repeatsLeft: 4, requestFlag: 'OK', scriptNumber: '4' },
+  { drugDescription: 'RAMIPRIL (APO) TABLETS 5mg', repeatsLeft: 3, requestFlag: 'OK', scriptNumber: '5' },
+  { drugDescription: 'SEVELAMER (ARX) TABLETS 800mg', repeatsLeft: 0, owing: true, requestFlag: 'Script owing', scriptNumber: '6' }
+]);
+assert.deepEqual(linkedRepeats.balances.map(row => row.repeatsLeft), [3, 1, 2, 4, 3, 0]);
+assert.equal(linkedRepeats.balances.at(-1).owing, true);
+assert.equal(linkedRepeats.scripts[1].matchedDrugCode, 'CALI2');
+
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
 assert.match(publicApp, /const noScript = m\.newScriptNeeded === true/);
 assert.match(publicApp, /repeats !== null && repeats < 2/);
 assert.match(publicApp, /item\?\.owing \|\| \/\^Script owing\$\//);
 assert.match(publicApp, /items\.filter\(item=>item\.selected\)/);
+assert.match(publicApp, /s\.matchedMedication \|\| s\.drugDescription/);
 console.log('Smoke tests passed.');

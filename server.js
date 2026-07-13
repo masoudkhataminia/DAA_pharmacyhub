@@ -377,6 +377,74 @@ function inferRequestFlag(repeatsLeft, owing, settings) {
   return 'OK';
 }
 
+const MEDICATION_MATCH_STOP_WORDS = new Set([
+  'apo','apotex','arx','as','hcl','tablet','tablets','tab','capsule','capsules','cap','bottle','cream','prefilled','syringe','safety','lock','ec','mr','odt','the','and'
+]);
+function medicationMatchTokens(value) {
+  return normalizeName(value).split(' ').filter(token => token.length >= 3 && !/^\d/.test(token) && !MEDICATION_MATCH_STOP_WORDS.has(token));
+}
+function medicationStrengths(value) {
+  const compact = cleanText(value).toLowerCase().replace(/\s+/g, '');
+  return [...compact.matchAll(/\d+(?:\.\d+)?(?:mcg|mg|ml|g|%)/g)].map(match => match[0]);
+}
+function medicationMatchScore(medication, scriptDrug) {
+  const medicationTokens = new Set(medicationMatchTokens(medication));
+  const scriptTokens = new Set(medicationMatchTokens(scriptDrug));
+  const sharedTokens = [...medicationTokens].filter(token => scriptTokens.has(token));
+  if (!sharedTokens.length) return -1;
+  const medicationDoses = medicationStrengths(medication);
+  const scriptDoses = medicationStrengths(scriptDrug);
+  const sharedDose = medicationDoses.some(dose => scriptDoses.includes(dose));
+  if (medicationDoses.length && scriptDoses.length && !sharedDose) return -1;
+  return sharedTokens.reduce((score, token) => score + Math.min(token.length, 12), 0) + (sharedDose ? 20 : 0);
+}
+function linkScriptsToMedicationBalances(balances = [], scripts = []) {
+  const candidates = [];
+  balances.forEach((balance, balanceIndex) => scripts.forEach((script, scriptIndex) => {
+    const score = medicationMatchScore(balance.medication, script.drugDescription);
+    if (score > 0) candidates.push({ balanceIndex, scriptIndex, score });
+  }));
+  candidates.sort((a, b) => b.score - a.score || scriptFreshnessScore(scripts[b.scriptIndex]) - scriptFreshnessScore(scripts[a.scriptIndex]));
+  const usedBalances = new Set();
+  const usedScripts = new Set();
+  const balanceToScript = new Map();
+  const scriptToBalance = new Map();
+  for (const candidate of candidates) {
+    if (usedBalances.has(candidate.balanceIndex) || usedScripts.has(candidate.scriptIndex)) continue;
+    usedBalances.add(candidate.balanceIndex);
+    usedScripts.add(candidate.scriptIndex);
+    balanceToScript.set(candidate.balanceIndex, candidate.scriptIndex);
+    scriptToBalance.set(candidate.scriptIndex, candidate.balanceIndex);
+  }
+  return {
+    balances: balances.map((balance, index) => {
+      const scriptIndex = balanceToScript.get(index);
+      if (scriptIndex === undefined) return balance;
+      const script = scripts[scriptIndex];
+      const repeatText = cleanText(script.repeatsLeft);
+      const repeatPosition = repeatText === '' ? null : Number(repeatText);
+      const hasRepeatPosition = Number.isFinite(repeatPosition);
+      return {
+        ...balance,
+        repeatsLeft: hasRepeatPosition ? repeatPosition : balance.repeatsLeft,
+        hasRepeatPosition: hasRepeatPosition || balance.hasRepeatPosition,
+        newScriptNeeded: hasRepeatPosition ? repeatPosition <= 0 : balance.newScriptNeeded,
+        owing: !!script.owing,
+        requestFlag: script.requestFlag,
+        scriptNumber: script.scriptNumber,
+        matchedScriptDescription: script.drugDescription,
+        repeatSource: 'Imported script list'
+      };
+    }),
+    scripts: scripts.map((script, index) => {
+      const balanceIndex = scriptToBalance.get(index);
+      if (balanceIndex === undefined) return script;
+      const balance = balances[balanceIndex];
+      return { ...script, matchedMedication: balance.medication, matchedDrugCode: balance.drugCode };
+    })
+  };
+}
+
 function headerMapFromRow(headerRow) {
   const map = new Map();
   (headerRow || []).forEach((h, i) => {
@@ -815,7 +883,28 @@ app.get('/api/special-order-letter/:requestId', (req, res) => { const store = re
 app.get('/api/special-order-letter/:requestId/pdf', (req, res) => { const store = readStore(); const r = store.specialOrderRequests.find(x=>x.id===req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.setHeader('Content-Type','application/pdf'); res.setHeader('Content-Disposition', `inline; filename="special-order-request-${r.date}.pdf"`); const doc = new PDFDocument({ margin: 36, size: 'A4' }); doc.pipe(res); doc.font('Helvetica-Bold').fontSize(14).text('Hibiscus Day and Night Pharmacy'); doc.font('Helvetica').fontSize(10).text('Hibiscus Shopping Centre, 4/8 Leanyer Dr, Leanyer NT 0812'); doc.text('(08) 8945 5955'); doc.moveDown(); doc.font('Helvetica-Bold').fontSize(16).text(r.mode === 'internal' ? 'Special Order Checklist' : 'Special Medication / Prescription Request'); doc.font('Helvetica').fontSize(10).text(`Date: ${dateDisplay(r.date)}`); doc.text(`Recipient: ${r.recipient || 'External supplier / prescriber'}`); doc.moveDown(); doc.text('Please review/provide the following medicines required for upcoming Webster/sachet packs where appropriate.'); doc.moveDown(); const startX=doc.x, widths=[95,130,70,85,65,65]; function row(cols, header=false){ const y=doc.y; const h=38; doc.font(header?'Helvetica-Bold':'Helvetica').fontSize(8); let x=startX; cols.forEach((c,i)=>{ doc.rect(x,y,widths[i],h).stroke(); doc.text(String(c??''),x+3,y+4,{width:widths[i]-6,height:h-8}); x+=widths[i]; }); doc.y=y+h; if(doc.y>735) doc.addPage(); } row(['Patient','Medicine','Strength','Source','Next pickup','Order due'], true); (r.items||[]).forEach(i=>row([i.patientFullName, i.medicine, i.strength||'', i.source||'', i.nextPickupDisplay||'', i.orderDueDisplay||''])); if(r.note){ doc.moveDown(); doc.font('Helvetica-Bold').text('Note:'); doc.font('Helvetica').text(r.note); } doc.moveDown(); doc.text('Kind Regards,'); doc.text('Hibiscus Pharmacy'); doc.end(); });
 
 app.patch('/api/patients/:id', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const before = clone(p); const allowed = ['fullName','firstName','lastName','dob','phone','address','cycleDays','lastPickupDate','packLeadDays','dispenseLeadDays','orderLeadDays','packStatus','dispenseStatus','medicineOrderStatus','scriptRequestStatus','patientSuppliedMeds','s8Priority','urgent','notes','active','packType']; for (const k of allowed) if (k in req.body) p[k] = req.body[k]; p.lastPickupDate = dateOrBlank(p.lastPickupDate); p.matchKey = matchKeyFor(p); p.updatedAt = nowISO(); audit(store, 'Updated patient', { patient: p.fullName, before, after: p }); writeStore(store); res.json(computePatient(p, store.settings)); });
-app.get('/api/patients/:id/details', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const key = normalizeName(p.fullName); res.json({ patient: computePatient(p, store.settings), medications: store.medications.filter(m => m.patientNameKey === key), medicationBalances: (store.mypakMedicationBalances || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(normalizeMyPakMedicationBalance), prescriptions: (store.mypakPrescriptions || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(m => ({ ...normalizeMyPakMedicationBalance(m), requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })), dispenseHistory: (store.mypakDispenseHistory || []).filter(m => String(m.patientId) === String(p.mypakPatientId)), doctors: store.mypakDoctors || [], scripts: store.scripts.filter(s => s.patientNameKey === key), doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id), scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id) }); });
+app.get('/api/patients/:id/details', (req, res) => {
+  const store = readStore();
+  const p = store.patients.find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Patient not found' });
+  const key = normalizeName(p.fullName);
+  const scripts = store.scripts.filter(s => s.patientNameKey === key);
+  const medicationBalances = (store.mypakMedicationBalances || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(normalizeMyPakMedicationBalance);
+  const prescriptions = (store.mypakPrescriptions || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(normalizeMyPakMedicationBalance);
+  const linkedBalances = linkScriptsToMedicationBalances(medicationBalances, scripts);
+  const linkedPrescriptions = linkScriptsToMedicationBalances(prescriptions, scripts);
+  res.json({
+    patient: computePatient(p, store.settings),
+    medications: store.medications.filter(m => m.patientNameKey === key),
+    medicationBalances: linkedBalances.balances,
+    prescriptions: linkedPrescriptions.balances.map(m => ({ ...m, requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })),
+    dispenseHistory: (store.mypakDispenseHistory || []).filter(m => String(m.patientId) === String(p.mypakPatientId)),
+    doctors: store.mypakDoctors || [],
+    scripts: linkedBalances.scripts,
+    doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id),
+    scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id)
+  });
+});
 app.post('/api/script-request', (req, res) => {
   const store = readStore();
   const p = store.patients.find(x => x.id === req.body.patientId);
@@ -909,4 +998,4 @@ if (process.env.NODE_ENV !== 'test') {
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances };
