@@ -2,7 +2,7 @@ import assert from 'assert';
 import fs from 'node:fs';
 import XLSX from 'xlsx';
 process.env.NODE_ENV = 'test';
-const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, scriptLetterHtml } = await import('../server.js');
+const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml } = await import('../server.js');
 
 assert.equal(dateDisplay('08/06/2026'), '08/06/2026');
 assert.equal(dateDisplay('2026-06-08'), '08/06/2026');
@@ -13,6 +13,11 @@ assert.equal(inferRequestFlag(0, false, {scriptLowRepeatThreshold:1}), 'New scri
 assert.equal(inferRequestFlag(1, false, {scriptLowRepeatThreshold:1}), 'Low repeats');
 assert.equal(inferRequestFlag(4, true, {scriptLowRepeatThreshold:1}), 'Script owing');
 assert.equal(inferRequestFlag(null, false, {scriptLowRepeatThreshold:1}), 'Manual request');
+assert.equal(isActionableScriptItem({ repeatsLeft:2, status:'Low repeats' }), false);
+assert.equal(isActionableScriptItem({ status:'Manual review' }), false);
+assert.equal(isActionableScriptItem({ repeatsLeft:1, status:'Low repeats' }), true);
+assert.equal(isActionableScriptItem({ repeatsLeft:4, owing:true, status:'Script owing' }), true);
+assert.equal(isActionableScriptItem({ status:'Manual request' }), true);
 const p = computePatient({fullName:'Test Patient', cycleDays:14, lastPickupDate:'01/06/2026', packLeadDays:3, dispenseLeadDays:1, orderLeadDays:7, packStatus:'Not started', dispenseStatus:'Not dispensed'}, {defaultCycleDays:14, defaultPackLeadDays:3, defaultDispenseLeadDays:1, defaultOrderLeadDays:7, urgentWindowDays:2, dueSoonWindowDays:7});
 assert.equal(p.nextPickupDisplay, '15/06/2026');
 
@@ -91,13 +96,20 @@ assert.ok(overview.some(row => row.overviewSource === 'Medication list'));
 
 const officialLetter = scriptLetterHtml({
   patientFullName: 'TEST, PATIENT',
-  items: [{ medicineName:'TEST MEDICINE', repeatsLeft:0, status:'Low repeats' }, { medicineName:'OWING MEDICINE', owing:true, status:'Script owing' }]
+  items: [
+    { medicineName:'TEST MEDICINE', repeatsLeft:0, status:'Low repeats' },
+    { medicineName:'OWING MEDICINE', owing:true, status:'Script owing' },
+    { medicineName:'TWO REPEAT MEDICINE', repeatsLeft:2, status:'Low repeats' },
+    { medicineName:'MANUAL REVIEW MEDICINE', repeatsLeft:'', status:'Manual review' }
+  ]
 });
 assert.match(officialLetter, /@page\{size:A4 landscape/);
 assert.equal((officialLetter.match(/class="important">IMPORTANT/g) || []).length, 2);
 assert.equal((officialLetter.match(/TEST MEDICINE/g) || []).length, 2);
 assert.equal((officialLetter.match(/Last repeat/g) || []).length, 2);
 assert.equal((officialLetter.match(/OWING/g) || []).length, 4);
+assert.doesNotMatch(officialLetter, /TWO REPEAT MEDICINE/);
+assert.doesNotMatch(officialLetter, /MANUAL REVIEW MEDICINE/);
 assert.match(officialLetter, /color:#f00/);
 assert.match(officialLetter, /two copies per landscape page/);
 

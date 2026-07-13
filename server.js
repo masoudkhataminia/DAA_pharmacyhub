@@ -406,6 +406,15 @@ function inferRequestFlag(repeatsLeft, owing, settings) {
   if (repeatPosition <= settings.scriptLowRepeatThreshold) return 'Low repeats';
   return 'OK';
 }
+function isActionableScriptItem(item) {
+  const status = cleanText(item?.status || item?.requestFlag || '');
+  if (item?.owing || /^script owing$/i.test(status)) return true;
+  if (/^manual request$/i.test(status)) return true;
+  const repeatText = cleanText(item?.repeatsLeft ?? '');
+  const repeats = repeatText === '' ? null : Number(repeatText);
+  if (Number.isFinite(repeats)) return repeats < 2;
+  return /^(new script required|no script \/ negative balance)$/i.test(status);
+}
 
 const MEDICATION_MATCH_STOP_WORDS = new Set([
   'apo','apotex','arx','as','hcl','tablet','tablets','tab','capsule','capsules','cap','bottle','cream','prefilled','syringe','safety','lock','ec','mr','odt','the','and'
@@ -1083,8 +1092,8 @@ app.post('/api/script-request', (req, res) => {
   const selected = selectedRaw
     .map(i => ({ ...i, status: cleanText(i.status || i.requestFlag || '') }))
     .filter(i => i.medicineName || i.drugDescription)
-    .filter(i => !/^ok$/i.test(i.status));
-  if (!selected.length) return res.status(400).json({ error: 'No actionable medicines selected. OK / sufficient-repeat items are excluded from GP letters.' });
+    .filter(isActionableScriptItem);
+  if (!selected.length) return res.status(400).json({ error: 'No actionable medicines selected. Only 0-1 repeat, owing, new-script, or explicit manual-request items can be included.' });
   const request = { id: id(), patientId: p.id, patientFullName: p.fullName, date: toISODate(todayDate()), status: 'Draft', recipient: cleanText(req.body.recipient || 'GP / Prescriber'), doctorId: cleanText(req.body.doctorId), items: selected, note: cleanText(req.body.note), createdAt: nowISO() };
   store.scriptRequests.unshift(request);
   for (const item of selected) if (item.prescriptionId) store.prescriptionWorkflow[String(item.prescriptionId)] = { status: 'requested', requestId: request.id, updatedAt: nowISO() };
@@ -1110,7 +1119,7 @@ function scriptLetterHtml(r) {
     const detail = lastRepeatOwingDetail(i);
     return `<tr><td>${htmlEsc(i.medicineName || i.drugDescription)}</td><td>${htmlEsc(detail)}</td></tr>`;
   }).concat(Array.from({ length: Math.max(0, 8 - items.length) }, () => '<tr><td>&nbsp;</td><td>&nbsp;</td></tr>')).join('');
-  const items = r.items || [];
+  const items = (r.items || []).filter(isActionableScriptItem);
   const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 8)) }, (_, index) => items.slice(index * 8, index * 8 + 8));
   const copy = chunk => `<section class="copy">
     <div class="important">IMPORTANT</div>
@@ -1137,7 +1146,7 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
   res.setHeader('Content-Disposition', `inline; filename="last-repeat-and-owing-${String(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
   const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'landscape' });
   doc.pipe(res);
-  const allItems = r.items || [];
+  const allItems = (r.items || []).filter(isActionableScriptItem);
   const chunks = Array.from({ length: Math.max(1, Math.ceil(allItems.length / 8)) }, (_, index) => allItems.slice(index * 8, index * 8 + 8));
   function drawCopy(x, chunk) {
     const width = 360;
@@ -1181,4 +1190,4 @@ if (process.env.NODE_ENV !== 'test') {
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml };
