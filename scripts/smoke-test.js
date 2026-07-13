@@ -62,6 +62,20 @@ assert.deepEqual(linkedRepeats.balances.map(row => row.repeatsLeft), [3, 1, 2, 4
 assert.equal(linkedRepeats.balances.at(-1).owing, true);
 assert.equal(linkedRepeats.scripts[1].matchedDrugCode, 'CALI2');
 
+const repeatedStrengthName = linkScriptsToMedicationBalances([
+  { medication: 'SPIRONOLACTONE - SPIRONOLACTONE (VIATRIS) 25 25mg TAB (SPIR9)', drugCode: 'SPIR9' }
+], [
+  { drugDescription: 'SPIRONOLACTONE (VIATRIS) 25 TABLETS 25mg', repeatsLeft: 5, requestFlag: 'OK', scriptNumber: '7' }
+]);
+assert.equal(repeatedStrengthName.balances[0].repeatsLeft, 5);
+
+const differentStrength = linkScriptsToMedicationBalances([
+  { medication: 'AMIODARONE - ARATAC 100mg TAB', drugCode: 'ARA1' }
+], [
+  { drugDescription: 'ARATAC TABLETS 200mg', repeatsLeft: 3, requestFlag: 'OK', scriptNumber: '8' }
+]);
+assert.equal(differentStrength.balances[0].repeatsLeft, undefined);
+
 const overview = buildPatientMedicationOverview(
   [{ medication: 'RAMIPRIL - RAMIPRIL (APO) 5mg TAB', drugCode: 'APOR3', balanceQty: 20 }],
   [
@@ -86,4 +100,6 @@ assert.match(publicApp, /refreshBtn'\)\.addEventListener\('click',\(\)=>syncMyPa
 assert.match(publicApp, /syncMyPakPatients\(\{silent:true\}\)/);
 assert.match(publicApp, /Medications, pill balance & scripts/);
 assert.doesNotMatch(publicApp, /<h3>Imported medication list<\/h3>/);
+assert.match(publicApp, /CLIENT_BUILD_VERSION/);
+assert.match(publicApp, /q\.length < 2/);
 console.log('Smoke tests passed.');

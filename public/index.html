@@ -93,18 +93,11 @@
           <input id="scriptPatientSearch" placeholder="Search patient name..." autocomplete="off" />
           <button class="ghost" id="clearScriptSearch" type="button">Clear</button>
         </div>
-        <div class="two-col wide-left">
-          <div>
-            <h3 class="subhead">Matching patients</h3>
-            <div id="scriptPatientResults" class="queue"></div>
-          </div>
-          <div>
-            <h3 class="subhead">Medicines for selected patient</h3>
-            <div id="requestBuilder" class="empty">Search and select a patient first.</div>
-          </div>
-        </div>
+        <div id="scriptPatientResults" class="queue script-patient-results"></div>
+        <h3 class="subhead">Ready-to-send medicines</h3>
+        <div id="requestBuilder" class="empty">Search and select a patient first.</div>
       </section>
-      <section class="panel"><div class="panel-head"><h2>Recent script requests</h2><span>draft / sent / received</span></div><div id="recentRequests" class="table-wrap"></div></section>
+      <details class="panel script-history"><summary>Recent script requests — open history</summary><div id="recentRequests" class="table-wrap"></div></details>
     </section>
 
 
@@ -147,6 +140,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260714-visible-patient-list"></script>
+  <script src="/app.js?v=20260714-visible-patients-repeat-v3"></script>
 </body>
 </html>

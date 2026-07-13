@@ -2,6 +2,7 @@ let STATE = null;
 let selectedPatientId = null;
 let editPatientId = null;
 let MPS_CONNECTION = null;
+const CLIENT_BUILD_VERSION = '20260714-repeat-request-v3';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -9,6 +10,17 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const badge = (text, cls='') => `<span class="badge ${cls}">${esc(text)}</span>`;
 const toast = msg => { const t=$('#toast'); t.textContent=msg; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'), 4200); };
 const api = async (url, opts={}) => { const r = await fetch(url, opts); if (!r.ok) throw new Error((await r.json().catch(()=>({error:r.statusText}))).error || r.statusText); return r.json(); };
+async function checkForAppUpdate(){
+  try {
+    const response = await fetch(`/api/build?t=${Date.now()}`, { cache:'no-store' });
+    const build = await response.json();
+    if (build.version && build.version !== CLIENT_BUILD_VERSION) {
+      const target = new URL(window.location.href);
+      target.searchParams.set('build', build.version);
+      window.location.replace(target.toString());
+    }
+  } catch (_) {}
+}
 
 function statusClass(p){
   if(p.calculatedStatus==='Overdue' || p.calculatedStatus==='Due today') return 'danger';
@@ -253,10 +265,12 @@ function renderScriptPatientSearch(){
   const box = $('#scriptPatientSearch');
   const q = (box?.value || '').toLowerCase().trim();
   const patients = STATE.patientsComputed || [];
-  const results = q
-    ? patients.filter(p => `${p.fullName} ${p.phone||''} ${p.externalId||''}`.toLowerCase().includes(q)).slice(0, 40)
-    : patients.slice().sort((a,b)=>a.fullName.localeCompare(b.fullName)).slice(0, 25);
-  $('#scriptPatientResults').innerHTML = results.length ? results.map(p=>`<div class="queue-card ${p.id===selectedPatientId?'selected-card':''}"><div><h3>${esc(p.fullName)}</h3><p>${esc(p.nextPickupDisplay||'pickup not set')} · cycle ${esc(p.cycleDays)} days</p><div class="badges">${patientBadges(p)}</div></div><button class="ghost" onclick="buildRequestForPatient('${p.id}')">Select</button></div>`).join('') : empty('No patient found. Check spelling or import List of Patients first.');
+  if (q.length < 2) {
+    $('#scriptPatientResults').innerHTML = empty('Type at least 2 letters to find a patient.');
+    return;
+  }
+  const results = patients.filter(p => `${p.fullName} ${p.phone||''} ${p.externalId||''}`.toLowerCase().includes(q)).slice(0, 20);
+  $('#scriptPatientResults').innerHTML = results.length ? results.map(p=>`<div class="queue-card compact-script-patient ${p.id===selectedPatientId?'selected-card':''}"><div><h3>${esc(p.fullName)}</h3><p>${esc(p.patientGroup||'')} · ${esc(p.nextPickupDisplay||'pickup not set')}</p></div><button class="ghost" onclick="buildRequestForPatient('${p.id}')">Select</button></div>`).join('') : empty('No patient found. Check spelling or import List of Patients first.');
 }
 function norm(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();}
 function repeatPosition(value){
@@ -526,4 +540,8 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
+window.addEventListener('focus', checkForAppUpdate);
+document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
+setInterval(checkForAppUpdate, 60000);
+checkForAppUpdate();
 loadState().then(async()=>{await Promise.all([refreshMyPakStatus(),refreshMpsStatus()]);await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));

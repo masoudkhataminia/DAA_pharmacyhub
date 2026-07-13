@@ -19,12 +19,22 @@ import { mapOfflineMpsPatients } from './services/mps/offline.js';
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const PORT = process.env.PORT || 3000;
+const APP_BUILD_VERSION = '20260714-repeat-request-v3';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '12mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.get('/api/build', (_, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.json({ version: APP_BUILD_VERSION });
+});
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+  }
+}));
 
 const DEFAULT_STORE = {
   version: 234,
@@ -404,8 +414,8 @@ function medicationMatchTokens(value) {
   return normalizeName(value).split(' ').filter(token => token.length >= 3 && !/^\d/.test(token) && !MEDICATION_MATCH_STOP_WORDS.has(token));
 }
 function medicationStrengths(value) {
-  const compact = cleanText(value).toLowerCase().replace(/\s+/g, '');
-  return [...compact.matchAll(/\d+(?:\.\d+)?(?:mcg|mg|ml|g|%)/g)].map(match => match[0]);
+  const text = cleanText(value).toLowerCase();
+  return [...text.matchAll(/\d+(?:\.\d+)?\s*(?:mcg|mg|ml|g|%)/g)].map(match => match[0].replace(/\s+/g, ''));
 }
 function medicationMatchScore(medication, scriptDrug) {
   const medicationTokens = new Set(medicationMatchTokens(medication));
