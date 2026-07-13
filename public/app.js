@@ -153,7 +153,7 @@ async function buildRequestForPatient(id){
   for (const m of d.prescriptions || []) {
     const key = norm(m.medication); if(!key) continue;
     const negative = Number(m.balanceQty) < 0 || m.isInsufficientPillBalance;
-    const noScript = Number(m.repeatsLeft) <= 0;
+    const noScript = m.newScriptNeeded === true;
     byMed.set(key,{ prescriptionId:m.prescriptionId, medicineName:m.medication, directions:m.direction||'', timing:`Balance ${patientValue(m.balanceQty)} · weekly ${patientValue(m.weeklyQty)}`, repeatsLeft:m.repeatsLeft??'', status:m.requestStatus==='requested'?'Requested':negative&&noScript?'No script / negative balance':negative?'Negative balance':noScript?'New script required':'OK', source:'MyPak prescription', drugCode:m.drugCode||'' });
   }
   for (const m of d.medicationBalances || []) {

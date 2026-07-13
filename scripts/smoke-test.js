@@ -1,4 +1,5 @@
 import assert from 'assert';
+import fs from 'node:fs';
 import XLSX from 'xlsx';
 process.env.NODE_ENV = 'test';
 const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast } = await import('../server.js');
@@ -25,4 +26,8 @@ assert.equal(parsedScripts.scripts.length, 1);
 assert.equal(parsedScripts.scripts[0].repeatsLeft, 3);
 assert.equal(parsedScripts.scripts[0].repeatsIssued, 0);
 assert.equal(parsedScripts.scripts[0].requestFlag, 'OK');
+
+const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
+assert.match(publicApp, /const noScript = m\.newScriptNeeded === true/);
 console.log('Smoke tests passed.');
