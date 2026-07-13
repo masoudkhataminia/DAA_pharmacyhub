@@ -44,16 +44,11 @@ export class MyPakSyncService {
         if (!pageRows.length || (dispenseTotal !== null && dispenseHistory.length >= dispenseTotal)) break;
         if (pageIndex === 50) throw new Error('MyPak dispense history pagination safety limit reached');
       }
-      const packJobs = [];
       const createdDateTo = new Date(); const createdDateFrom = new Date(createdDateTo); createdDateFrom.setDate(createdDateFrom.getDate() - 120);
-      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
-        const response = await this.client.listPackJobs({ pageIndex, pageSize: this.pageSize, status: ['0','1','2','3','4','5','6','7'], patientGroupIds: [], createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString(), sortField: 'CreatedDate', sortOrder: -1 });
-        const pageRows = packRows(response);
-        const packTotal = Number.isFinite(Number(response.total ?? response.data?.total)) ? Number(response.total ?? response.data?.total) : null;
-        packJobs.push(...pageRows);
-        if (!pageRows.length || (packTotal !== null && packJobs.length >= packTotal)) break;
-        if (pageIndex === this.maxPages) throw new Error('MyPak pack job pagination safety limit reached');
-      }
+      // MyPak's own summary UI requests large snapshots. One snapshot avoids dozens of slow
+      // 200-row calls while remaining bounded to the confirmed 120-day read-only window.
+      const packResponse = await this.client.listPackJobs({ pageIndex: 1, pageSize: 99999, status: ['0','1','2','3','4','5','6','7'], patientGroupIds: [], createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString(), sortField: 'CreatedDate', sortOrder: -1 });
+      const packJobs = packRows(packResponse);
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
       store.mypakMedicationBalances = [...new Map(balances.map(rawRow => {
         const row = normalizeMyPakMedicationBalance(rawRow);
@@ -62,7 +57,7 @@ export class MyPakSyncService {
       store.mypakPrescriptions = store.mypakMedicationBalances.map(row => ({ ...row, prescriptionId: row.prescriptionId || row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`, lastDispenseDate: row.lastDispenseDate || row.lastDispenseBalanceUpdated || '', isInsufficientPillBalance: insufficient.get(String(row.prescriptionId || row.vpBalanceId)) || Number(row.balanceQty) < 0 }));
       store.mypakDoctors = [...new Map(doctors.map(row => [String(row.doctorId), row])).values()];
       store.mypakDispenseHistory = [...new Map(dispenseHistory.map(row => [String(row.scriptTrackingId), row])).values()];
-      store.mypakPackJobs = mergePackJobs(store.mypakPackJobs, packJobs);
+      store.mypakPackJobs = mergePackJobs([], packJobs);
       store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, totalDispenseHistory: store.mypakDispenseHistory.length, totalPackJobs: store.mypakPackJobs.length, status: 'success' };
       this.writeStore(store); Object.assign(this.status, stats, { running: false, progress: 100, finishedAt: at });
       return { started: true, status: this.getStatus() };

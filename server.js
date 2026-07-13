@@ -903,6 +903,7 @@ function specialOrderLetterHtml(r) {
 function buildState(store) {
   const {
     mypakPackContents: _privateMyPakPackContents,
+    mypakPackJobs: _privateMyPakPackJobs,
     mpsFacilityGroups: _privateMpsGroups,
     mpsFacilities: _privateMpsFacilities,
     mpsDrugs: _privateMpsDrugs,

@@ -14,12 +14,14 @@ export function packJobId(row) {
 
 export function normalizePackJob(row = {}) {
   const status = text(value(row, 'status', 'jobStatus'));
+  const patient = row.patient && typeof row.patient === 'object' ? row.patient : {};
+  const group = row.patientGroup && typeof row.patientGroup === 'object' ? row.patientGroup : {};
   return {
     ...row,
     jobId: packJobId(row),
     patientId: text(value(row, 'patientId', 'patientID', 'clientId')),
-    patientName: text(value(row, 'patientName', 'fullName', 'clientName')),
-    patientGroupName: text(value(row, 'patientGroupName', 'patientGroup', 'groupName')),
+    patientName: text(value(row, 'patientName', 'fullName', 'clientName') || value(patient, 'fullName', 'patientName', 'name') || `${value(patient,'firstName') || ''} ${value(patient,'lastName') || ''}`),
+    patientGroupName: text(value(row, 'patientGroupName', 'groupName') || (typeof row.patientGroup === 'string' ? row.patientGroup : '') || value(group, 'name', 'patientGroupName')),
     barcode: text(value(row, 'barcode', 'jobNumber', 'jobNo')),
     status,
     statusLabel: PACK_STATUS_LABELS[status] || text(value(row, 'statusName')) || status || 'Unknown',
