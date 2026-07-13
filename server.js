@@ -19,7 +19,7 @@ import { mapOfflineMpsPatients } from './services/mps/offline.js';
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-repeat-request-v3';
+const APP_BUILD_VERSION = '20260714-last-repeat-owing-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -1097,11 +1097,17 @@ app.post('/api/prescription-automation', (req, res) => { const store = readStore
 app.patch('/api/script-request/:id', (req, res) => { const store = readStore(); const r = store.scriptRequests.find(x => x.id === req.params.id); if (!r) return res.status(404).json({ error: 'Request not found' }); Object.assign(r, req.body, { updatedAt: nowISO() }); audit(store, 'Updated script request', { patient: r.patientFullName, status: r.status }); writeStore(store); res.json(r); });
 app.post('/api/doctor-updates', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.body.patientId); if (!p) return res.status(404).json({ error: 'Patient not found' }); const update = { id: id(), patientId: p.id, patientFullName: p.fullName, receivedDate: dateOrBlank(req.body.receivedDate) || toISODate(todayDate()), source: cleanText(req.body.source || 'Doctor letter'), changeType: cleanText(req.body.changeType || 'Medication change'), medicine: cleanText(req.body.medicine), oldDirection: cleanText(req.body.oldDirection), newDirection: cleanText(req.body.newDirection), effectiveFrom: cleanText(req.body.effectiveFrom || 'Needs review'), status: 'Pending pharmacist review', risk: cleanText(req.body.risk || 'Routine'), notes: cleanText(req.body.notes), createdAt: nowISO() }; store.doctorUpdates.unshift(update); p.urgent = p.urgent || /urgent|current|immediate/i.test(update.risk + ' ' + update.effectiveFrom); audit(store, 'Added doctor medication update', { patient: p.fullName, medicine: update.medicine, changeType: update.changeType }); writeStore(store); res.json(update); });
 app.patch('/api/doctor-updates/:id', (req, res) => { const store = readStore(); const u = store.doctorUpdates.find(x => x.id === req.params.id); if (!u) return res.status(404).json({ error: 'Doctor update not found' }); Object.assign(u, req.body, { updatedAt: nowISO() }); audit(store, 'Updated doctor update', { patient: u.patientFullName, status: u.status }); writeStore(store); res.json(u); });
+function lastRepeatOwingDetail(item = {}) {
+  const reason = cleanText(item.status || item.requestFlag || 'New prescription required');
+  if (item.owing || /owing/i.test(reason)) return 'OWING';
+  const repeatsText = cleanText(item.repeatsLeft ?? '');
+  const repeats = repeatsText === '' ? null : Number(repeatsText);
+  if (Number.isFinite(repeats)) return repeats <= 0 ? 'Last repeat' : `${repeats} repeat${repeats === 1 ? '' : 's'} left`;
+  return reason;
+}
 function scriptLetterHtml(r) {
   const rowHtml = items => items.map(i => {
-    const reason = cleanText(i.status || i.requestFlag || 'New prescription required');
-    const repeats = cleanText(i.repeatsLeft ?? '');
-    const detail = reason === 'Script owing' ? 'Script owing' : (repeats !== '' ? `${repeats} repeat${repeats === '1' ? '' : 's'} left` : reason);
+    const detail = lastRepeatOwingDetail(i);
     return `<tr><td>${htmlEsc(i.medicineName || i.drugDescription)}</td><td>${htmlEsc(detail)}</td></tr>`;
   }).concat(Array.from({ length: Math.max(0, 8 - items.length) }, () => '<tr><td>&nbsp;</td><td>&nbsp;</td></tr>')).join('');
   const items = r.items || [];
@@ -1128,7 +1134,7 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
   const r = store.scriptRequests.find(x => x.id === req.params.requestId);
   if (!r) return res.status(404).send('Request not found');
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="script-request-${String(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
+  res.setHeader('Content-Disposition', `inline; filename="last-repeat-and-owing-${String(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
   const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'landscape' });
   doc.pipe(res);
   const allItems = r.items || [];
@@ -1147,9 +1153,7 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
       doc.rect(x, y, medicineWidth, rowHeight).stroke('#111111');
       doc.rect(x + medicineWidth, y, detailWidth, rowHeight).stroke('#111111');
       if (!item) continue;
-      const reason = cleanText(item.status || item.requestFlag || 'New prescription required');
-      const repeats = cleanText(item.repeatsLeft ?? '');
-      const detail = reason === 'Script owing' ? 'Script owing' : (repeats !== '' ? `${repeats} repeat${repeats === '1' ? '' : 's'} left` : reason);
+      const detail = lastRepeatOwingDetail(item);
       const medicine = cleanText(item.medicineName || item.drugDescription);
       doc.font('Helvetica').fontSize(medicine.length > 55 ? 6.3 : 7.3).text(medicine, x + 5, y + 5, { width: medicineWidth - 10, height: rowHeight - 8 });
       doc.fontSize(7.3).text(detail, x + medicineWidth + 5, y + 6, { width: detailWidth - 10, height: rowHeight - 8 });
@@ -1177,4 +1181,4 @@ if (process.env.NODE_ENV !== 'test') {
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, scriptLetterHtml };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml };

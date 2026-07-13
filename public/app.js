@@ -258,7 +258,7 @@ async function savePatient(e){
 }
 function renderScriptPage(){
   renderScriptPatientSearch();
-  $('#recentRequests').innerHTML = (STATE.scriptRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th>Status / next action</th><th>Request</th></tr></thead><tbody>${STATE.scriptRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.patientFullName)}</td><td>${r.items.length}</td><td>${badge(r.status,r.status==='Received'?'ok':r.status==='Sent'?'blue':'warn')}<div class="table-actions">${r.status==='Draft'?`<button onclick="setScriptRequestStatus('${r.id}','Sent')">Mark sent</button>`:''}${r.status==='Sent'?`<button onclick="setScriptRequestStatus('${r.id}','Received')">Mark received</button>`:''}${r.status==='Received'?`<button class="ghost" onclick="setScriptRequestStatus('${r.id}','Draft')">Reopen</button>`:''}</div></td><td><a class="linkbtn" href="/api/letter/${r.id}/pdf" target="_blank">PDF</a> <a class="linkbtn" href="/api/letter/${r.id}" target="_blank">Preview</a></td></tr>`).join('')}</tbody></table>` : empty('No script requests created yet.');
+  $('#recentRequests').innerHTML = (STATE.scriptRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th>Status / next action</th><th>Request</th></tr></thead><tbody>${STATE.scriptRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.patientFullName)}</td><td>${r.items.length}</td><td>${badge(r.status,r.status==='Received'?'ok':r.status==='Sent'?'blue':'warn')}<div class="table-actions">${r.status==='Draft'?`<button onclick="setScriptRequestStatus('${r.id}','Sent')">Mark sent</button>`:''}${r.status==='Sent'?`<button onclick="setScriptRequestStatus('${r.id}','Received')">Mark received</button>`:''}${r.status==='Received'?`<button class="ghost" onclick="setScriptRequestStatus('${r.id}','Draft')">Reopen</button>`:''}</div></td><td><a class="linkbtn" href="/api/letter/${r.id}/pdf" target="_blank">Last Repeat / Owing PDF</a> <a class="linkbtn" href="/api/letter/${r.id}" target="_blank">Preview</a></td></tr>`).join('')}</tbody></table>` : empty('No script requests created yet.');
 }
 async function setScriptRequestStatus(id,status){await api(`/api/script-request/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(`Request marked ${status}.`);await loadState();showView('scripts');}
 function renderScriptPatientSearch(){
@@ -347,7 +347,7 @@ async function buildRequestForPatient(id){
     <div id="requestItems" class="request-list"></div>
     <label class="field"><span>Prescriber</span><select id="requestDoctor"><option value="">GP / Prescriber</option>${doctors.map(x=>`<option value="${esc(x.doctorId)}">${esc(`${x.firstName||''} ${x.lastName||''}`.trim())}${x.email?` · ${esc(x.email)}`:''}</option>`).join('')}</select></label>
     <textarea id="requestNote" rows="3" placeholder="Optional note to doctor / GP"></textarea>
-    <button onclick="createScriptRequest()">Generate PDF script request</button>` : empty('No medicines/scripts found for this patient. Import List of Scripts first, then try this search again.');
+    <button onclick="createScriptRequest()">Generate Last Repeat / Owing PDF</button>` : empty('No medicines/scripts found for this patient. Import List of Scripts first, then try this search again.');
   $('#requestBuilder').dataset.items = JSON.stringify(items);
   if (items.length) renderRequestItems();
   renderScriptPatientSearch();
@@ -398,7 +398,7 @@ async function createScriptRequest(){
   const selected=items.filter(item=>item.selected).map(item=>({ prescriptionId:item.prescriptionId, medicineName:item.medicineName, directions:item.directions||'', repeatsLeft:item.repeatsLeft??'', status:/^OK$/i.test(item.status||'')?'Manual request':item.status, scriptNumber:item.scriptNumber||'', lastDispenseDate:item.lastDispenseDate||'', lastDispenseQty:item.lastDispenseQty??'', owing:!!item.owing }));
   if(!selected.length) return toast('No actionable medicine selected. OK / sufficient-repeat medicines are not added to the GP letter.');
   const doctor=$('#requestDoctor'); const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
-  toast('PDF script request created.'); window.open(`/api/letter/${r.id}/pdf`,'_blank'); await loadState(); showView('scripts');
+  toast('Last Repeat / Owing PDF created.'); window.open(`/api/letter/${r.id}/pdf`,'_blank'); await loadState(); showView('scripts');
 }
 
 function specialBadge(o){

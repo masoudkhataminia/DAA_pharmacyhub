@@ -91,11 +91,13 @@ assert.ok(overview.some(row => row.overviewSource === 'Medication list'));
 
 const officialLetter = scriptLetterHtml({
   patientFullName: 'TEST, PATIENT',
-  items: [{ medicineName:'TEST MEDICINE', repeatsLeft:1, status:'Low repeats' }]
+  items: [{ medicineName:'TEST MEDICINE', repeatsLeft:0, status:'Low repeats' }, { medicineName:'OWING MEDICINE', owing:true, status:'Script owing' }]
 });
 assert.match(officialLetter, /@page\{size:A4 landscape/);
 assert.equal((officialLetter.match(/class="important">IMPORTANT/g) || []).length, 2);
 assert.equal((officialLetter.match(/TEST MEDICINE/g) || []).length, 2);
+assert.equal((officialLetter.match(/Last repeat/g) || []).length, 2);
+assert.equal((officialLetter.match(/OWING/g) || []).length, 4);
 assert.match(officialLetter, /color:#f00/);
 assert.match(officialLetter, /two copies per landscape page/);
 
