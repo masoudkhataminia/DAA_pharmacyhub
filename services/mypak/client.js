@@ -54,4 +54,10 @@ export class MyPakClient {
   listDispenseTracking(body) { return this.request('dispenseTracking', { body }); }
   reportOptions() { return this.request('patientReportOptions'); }
   patientGroup(groupId) { return this.request('patientGroup', { params: { groupId } }); }
+  listPackJobs(body) { return this.request('packJobs', { body }); }
+  packJobSummary(body) { return this.request('packJobSummary', { body }); }
+  packJobChecking(jobId) { return this.request('packJobChecking', { params: { jobId } }); }
+  packJobDistribution(jobId) { return this.request('packJobDistribution', { params: { jobId } }); }
+  packJobCorrection(jobId) { return this.request('packJobCorrection', { params: { jobId } }); }
+  packJobPdf(jobId) { return this.request('packJobPdf', { body: { ids: [jobId] } }); }
 }

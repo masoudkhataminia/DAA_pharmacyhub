@@ -1,6 +1,6 @@
 # Webster Pack Pro v2.3.4 Persistent Tested
 
-Run in Replit with **Run** or `node server.js`. Do not run npm install; dependencies are bundled.
+Run with `npm start` on the configured DAA server.
 
 Workflow:
 1. Upload `List of Patients.xlsx`. HIND/Webster patients are saved in `data/store.json`.
@@ -31,3 +31,10 @@ Tested locally with the user supplied List of Patients, List of Scripts and Pack
 - Holds live MPS bearer tokens in server memory only; tokens are not stored or returned to the browser.
 
 See `docs/MPS_CONNECTOR.md` for setup, supported endpoints and safety constraints.
+
+## Doctor Change → Pack Amendment
+
+- Reads MyPak pack-job status, pack month/week, creator/completer and exact checking dose allocations without modifying MyPak.
+- Compares a pasted doctor email or uploaded medication summary with the patient's current MyPak medication list when the private OpenAI API key is configured.
+- Requires a pharmacist to approve or reject every proposed change.
+- Produces a printable amendment worksheet listing the exact pack, date, day, dose compartment and quantity to add/remove/change, with packer and checker sign-off.

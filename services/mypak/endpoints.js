@@ -7,7 +7,13 @@ export const MYPAK_ENDPOINTS = Object.freeze({
   patientDetail: { method: 'GET', path: '/patients/:patientId' },
   dispenseTracking: { method: 'POST', path: '/scripttrackings/search' },
   patientReportOptions: { method: 'GET', path: '/patientreportoption' },
-  patientGroup: { method: 'GET', path: '/patientGroups/:groupId' }
+  patientGroup: { method: 'GET', path: '/patientGroups/:groupId' },
+  packJobs: { method: 'POST', path: '/packjobs' },
+  packJobSummary: { method: 'POST', path: '/packjobs/summary' },
+  packJobChecking: { method: 'GET', path: '/packjobs/:jobId/checking' },
+  packJobDistribution: { method: 'GET', path: '/packjobs/:jobId/distribution' },
+  packJobCorrection: { method: 'GET', path: '/packjobs/:jobId/correction' },
+  packJobPdf: { method: 'POST', path: '/packjobs/pdf' }
 });
 
 export function endpointPath(name, params = {}) {

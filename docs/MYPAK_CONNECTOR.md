@@ -16,6 +16,12 @@ Never commit credentials, cookies, patient exports, `data/store.json`, or captur
 - `POST /patients/list`
 - `GET /patientreportoption`
 - `GET /patientGroups/:groupId`
+- `POST /packjobs` (read-only job listing)
+- `POST /packjobs/summary`
+- `GET /packjobs/:jobId/checking`
+- `GET /packjobs/:jobId/distribution`
+- `GET /packjobs/:jobId/correction`
+- `POST /packjobs/pdf` (on-demand preview generation only)
 
 The allowlisted registry is in `services/mypak/endpoints.js`; `config/mypak-endpoints.example.json` documents its safe format. Add a newly captured endpoint only after confirming its method and path in the authorised MyPak frontend, then add a typed client wrapper, mapper/sync handler, and local route only if needed. Do not add a generic proxy.
 
@@ -23,7 +29,13 @@ The allowlisted registry is in `services/mypak/endpoints.js`; `config/mypak-endp
 
 Test the connection with `POST /api/mypak/test`. Start a full patient sync with `POST /api/mypak/sync/patients`; `POST /api/mypak/sync/all` additionally caches confirmed report options and each group referenced by the synced patients. Monitor with `GET /api/mypak/sync/status`. The Import Centre provides the patient sync control and reloads `/api/state` after success.
 
-Patient pages are requested sequentially, with a 200-record page size and 100-page safety limit. Temporary 429, 5xx, timeout, and network failures receive limited backoff retries. Existing patients are matched by MyPak ID, external ID, name plus DOB, then name-only for review. Uncertain matches and locally cached MyPak patients missing from a later sync are reviewed, never silently merged or deleted.
+Patient and pack-job pages are requested sequentially, with a 200-record page size and 100-page safety limit. Pack jobs from the last 120 days are merged by immutable `jobId`, so a later sync updates status/ownership instead of duplicating the job. Exact dose allocations are fetched only for the selected patient's relevant packs and cached locally. No MyPak complete, confirm, reject, reverse, delete, or edit endpoint is allowlisted.
+
+Temporary 429, 5xx, timeout, and network failures receive limited backoff retries. Existing patients are matched by MyPak ID, external ID, name plus DOB, then name-only for review. Uncertain matches and locally cached MyPak patients missing from a later sync are reviewed, never silently merged or deleted.
+
+## Doctor Change AI
+
+Set `OPENAI_API_KEY` in the private server environment to enable email/PDF/image medication-change analysis. `OPENAI_DOCTOR_CHANGE_MODEL` is optional and defaults to `gpt-5-mini`. Requests use the Responses API with structured JSON output and `store: false`. The browser never receives the API key. AI output is saved only as a pending proposal; staff must approve each change before DAA unlocks the printable pack-amendment worksheet. DAA never writes the proposal back to MyPak or MPS.
 
 ## Troubleshooting
 

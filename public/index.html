@@ -125,10 +125,13 @@
     </section>
 
     <section id="doctor" class="view">
+      <section class="panel doctor-ai-panel"><div class="panel-head"><div><h2>Doctor Change → Pack Amendment</h2><p class="muted">Paste an email or upload a medication summary. AI proposes the differences; a pharmacist must approve every change.</p></div><span id="doctorAiStatus">Checking AI configuration…</span></div><form id="doctorAiForm" class="doctor-ai-form"><label class="field"><span>Patient</span><select id="doctorAiPatient" name="patientId"></select></label><label class="field"><span>Doctor email / medication summary</span><textarea id="doctorSourceText" name="sourceText" rows="8" placeholder="Paste the full doctor email or medication summary here…"></textarea></label><label class="field"><span>Upload document</span><input id="doctorSourceFile" name="file" type="file" accept=".pdf,.doc,.docx,.txt,.rtf,image/*"></label><div class="doctor-safety"><b>Clinical safety gate</b><br>AI output is a proposal only. DAA never changes MyPak/MPS. Approve or reject each line before producing the pack worksheet.</div><button id="doctorAnalyseBtn" type="submit">Analyse medication changes</button></form><div id="patientPackSnapshot" class="pack-snapshot"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Analysis & exact affected packs</h2><span>live MyPak pack status, contents, dates and compartments</span></div><div id="doctorAnalysisWorkbench"></div></section>
       <div class="two-col wide-left">
-        <section class="panel"><div class="panel-head"><h2>Pending doctor updates</h2><span>never auto-apply medicine changes</span></div><div id="doctorList" class="queue"></div></section>
-        <section class="panel"><div class="panel-head"><h2>Add doctor update</h2><span>manual safe entry</span></div><form id="doctorForm" class="form-grid"></form></section>
+        <section class="panel"><div class="panel-head"><h2>Recent change analyses</h2><span>pharmacist review history</span></div><div id="doctorAnalysisList" class="queue"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Manual fallback</h2><span>add one pending change without AI</span></div><form id="doctorForm" class="form-grid"></form></section>
       </div>
+      <section class="panel"><div class="panel-head"><h2>Other pending doctor updates</h2><span>never auto-apply medicine changes</span></div><div id="doctorList" class="queue"></div></section>
     </section>
 
     <section id="settings" class="view">
@@ -140,6 +143,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260714-script-delete-v2"></script>
+  <script src="/app.js?v=20260714-pack-amendment-v1"></script>
 </body>
 </html>

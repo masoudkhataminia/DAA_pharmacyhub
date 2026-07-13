@@ -10,6 +10,9 @@ import { MyPakClient } from './services/mypak/client.js';
 import { MyPakSyncService } from './services/mypak/sync.js';
 import { publicMyPakError } from './services/mypak/errors.js';
 import { normalizeMyPakMedicationBalance } from './services/mypak/mapper.js';
+import { normalizePackDose, patientPackJobs } from './services/mypak/packs.js';
+import { analyseDoctorChange, doctorChangeAiStatus } from './services/doctor-change/analysis.js';
+import { buildPackImpact } from './services/doctor-change/impact.js';
 import { MpsClient } from './services/mps/client.js';
 import { MpsSyncService } from './services/mps/sync.js';
 import { publicMpsError } from './services/mps/errors.js';
@@ -19,7 +22,7 @@ import { mapOfflineMpsPatients } from './services/mps/offline.js';
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-script-delete-v2';
+const APP_BUILD_VERSION = '20260714-pack-amendment-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -37,7 +40,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 const DEFAULT_STORE = {
-  version: 234,
+  version: 235,
   settings: {
     defaultCycleDays: 14,
     weeklyDays: 7,
@@ -59,6 +62,7 @@ const DEFAULT_STORE = {
   specialOrderRequests: [],
   packRecords: [],
   doctorUpdates: [],
+  doctorChangeAnalyses: [],
   importReviews: [],
   auditLog: [],
   mypakGroups: [],
@@ -67,6 +71,8 @@ const DEFAULT_STORE = {
   mypakPrescriptions: [],
   mypakDoctors: [],
   mypakDispenseHistory: [],
+  mypakPackJobs: [],
+  mypakPackContents: {},
   mpsFacilityGroups: [],
   mpsFacilities: [],
   mpsDrugs: [],
@@ -85,7 +91,7 @@ const DEFAULT_STORE = {
     subjectTemplate: 'Prescription request – {{patientName}}',
     bodyTemplate: 'Dear Dr,\n\nPlease review and provide prescriptions for the selected medicines for {{patientName}}.\n\nKind regards,\nHibiscus Pharmacy'
   },
-  mypakSync: { lastSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, status: 'never' },
+  mypakSync: { lastSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, totalPackJobs: 0, status: 'never' },
   mpsSync: { lastPatientSyncAt: null, lastMedicationSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, totalDrugs: 0, totalOrders: 0, totalPackedDays: 0, totalPackedPrn: 0, status: 'never' }
 };
 
@@ -896,6 +902,7 @@ function specialOrderLetterHtml(r) {
 
 function buildState(store) {
   const {
+    mypakPackContents: _privateMyPakPackContents,
     mpsFacilityGroups: _privateMpsGroups,
     mpsFacilities: _privateMpsFacilities,
     mpsDrugs: _privateMpsDrugs,
@@ -950,7 +957,7 @@ function importPatients(buffer, filename) {
 app.get('/api/state', (_, res) => res.json(buildState(readStore())));
 app.get('/api/mypak/status', (_, res) => {
   const sync = readStore().mypakSync || {};
-  res.json({ configured: mypakClient.isConfigured(), authenticated: Boolean(mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt), baseUrl: mypakClient.baseUrl, lastSuccessfulRequestAt: mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt || null, lastSyncAt: sync.lastSyncAt || null, lastError: sync.lastError || null, patientCount: sync.totalPatients || 0 });
+  res.json({ configured: mypakClient.isConfigured(), authenticated: Boolean(mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt), baseUrl: mypakClient.baseUrl, lastSuccessfulRequestAt: mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt || null, lastSyncAt: sync.lastSyncAt || null, lastError: sync.lastError || null, patientCount: sync.totalPatients || 0, packJobCount: sync.totalPackJobs || 0 });
 });
 app.post('/api/mypak/test', async (_, res) => { try { await mypakClient.reportOptions(); res.json({ ok: true, authenticated: true }); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/patients', async (req, res) => {
@@ -968,6 +975,20 @@ app.get('/api/mypak/patients/:mypakPatientId', (req, res) => { const patient = r
 app.get('/api/mypak/patients/:mypakPatientId/live', async (req, res) => { try { res.json(await mypakClient.patientDetail(req.params.mypakPatientId)); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/groups/:groupId', async (req, res) => { try { res.json(await mypakClient.patientGroup(req.params.groupId)); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/report-options', async (_, res) => { try { res.json(await mypakClient.reportOptions()); } catch (error) { sendMyPakError(res, error); } });
+app.get('/api/mypak/pack-jobs/:jobId/print', async (req, res) => {
+  try {
+    const response = await mypakClient.packJobPdf(req.params.jobId);
+    const findUrl = value => {
+      if (typeof value === 'string' && /^https:\/\//i.test(value)) return value;
+      if (Array.isArray(value)) for (const item of value) { const found = findUrl(item); if (found) return found; }
+      if (value && typeof value === 'object') for (const item of Object.values(value)) { const found = findUrl(item); if (found) return found; }
+      return '';
+    };
+    const url = findUrl(response);
+    if (!url) return res.status(404).json({ error: 'MyPak did not return a printable pack document.' });
+    res.redirect(url);
+  } catch (error) { sendMyPakError(res, error); }
+});
 app.post('/api/mypak/sync/patients', async (_, res) => { try { const result = await mypakSyncService.syncPatients(); res.status(result.started ? 200 : 202).json(result); } catch (error) { sendMyPakError(res, error); } });
 app.post('/api/mypak/sync/all', async (_, res) => { try { const result = await mypakSyncService.syncAll(); res.status(result.started ? 200 : 202).json(result); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/sync/status', (_, res) => res.json(mypakSyncService.getStatus()));
@@ -1081,6 +1102,82 @@ app.get('/api/patients/:id/details', (req, res) => {
     doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id),
     scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id)
   });
+});
+app.get('/api/patients/:id/pack-jobs', (req, res) => {
+  const store = readStore(); const patient = store.patients.find(item => item.id === req.params.id);
+  if (!patient) return res.status(404).json({ error: 'Patient not found' });
+  res.json({ patientId: patient.id, jobs: patientPackJobs(store, patient), lastSyncAt: store.mypakSync?.lastSyncAt || null });
+});
+
+app.get('/api/doctor-change/ai-status', (_, res) => res.json(doctorChangeAiStatus()));
+app.post('/api/doctor-change/analyse', upload.single('file'), async (req, res) => {
+  try {
+    const store = readStore(); const patient = store.patients.find(item => item.id === req.body.patientId);
+    if (!patient) return res.status(404).json({ error: 'Patient not found' });
+    if (req.file && req.file.size > 15 * 1024 * 1024) return res.status(413).json({ error: 'Doctor document must be 15 MB or smaller.' });
+    const medications = (store.mypakMedicationBalances || []).filter(item => String(item.patientId) === String(patient.mypakPatientId));
+    const result = await analyseDoctorChange({ patient, medications, sourceText: req.body.sourceText, file: req.file });
+    const analysis = { id: id(), patientId: patient.id, patientFullName: patient.fullName, sourceName: cleanText(req.file?.originalname || req.body.sourceName || 'Pasted doctor email'), sourceText: String(req.body.sourceText || '').slice(0, 30000), documentSummary: cleanText(result.documentSummary), warnings: result.warnings || [], changes: (result.changes || []).map(change => ({ ...change, id: id(), pharmacistDecision: 'Pending' })), status: 'Pending pharmacist review', createdAt: nowISO(), packImpact: [] };
+    store.doctorChangeAnalyses.unshift(analysis); store.doctorChangeAnalyses = store.doctorChangeAnalyses.slice(0, 300);
+    audit(store, 'AI proposed doctor medication changes', { patient: patient.fullName, source: analysis.sourceName, changes: analysis.changes.length, status: analysis.status });
+    writeStore(store); res.json(analysis);
+  } catch (error) { res.status(error.status || 500).json({ error: error.message || 'Doctor document analysis failed' }); }
+});
+
+app.patch('/api/doctor-change/analyses/:id', (req, res) => {
+  const store = readStore(); const analysis = store.doctorChangeAnalyses.find(item => item.id === req.params.id);
+  if (!analysis) return res.status(404).json({ error: 'Doctor change analysis not found' });
+  if (Array.isArray(req.body.changes)) analysis.changes = req.body.changes.map(change => ({ ...change, pharmacistDecision: ['Approved','Rejected','Pending'].includes(change.pharmacistDecision) ? change.pharmacistDecision : 'Pending' }));
+  if (['Pending pharmacist review','Approved for pack worksheet','Closed'].includes(req.body.status)) analysis.status = req.body.status;
+  analysis.packImpact = []; analysis.packImpactUpdatedAt = null;
+  analysis.updatedAt = nowISO();
+  audit(store, 'Reviewed AI doctor medication changes', { patient: analysis.patientFullName, analysisId: analysis.id, status: analysis.status, approved: analysis.changes.filter(change => change.pharmacistDecision === 'Approved').length });
+  writeStore(store); res.json(analysis);
+});
+
+app.post('/api/doctor-change/analyses/:id/pack-impact', async (req, res) => {
+  const store = readStore(); const analysis = store.doctorChangeAnalyses.find(item => item.id === req.params.id);
+  if (!analysis) return res.status(404).json({ error: 'Doctor change analysis not found' });
+  const patient = store.patients.find(item => item.id === analysis.patientId);
+  if (!patient) return res.status(404).json({ error: 'Patient not found' });
+  const today = todayDate(), earliest = addDays(today, -14), latest = addDays(today, 62);
+  const jobs = patientPackJobs(store, patient).filter(job => { const date = parseDate(job.packStartDate); return date && date >= earliest && date <= latest; }).slice(0, 16);
+  store.mypakPackContents ||= {};
+  const detailsByJob = {};
+  for (const job of jobs) {
+    try {
+      const loaders = job.status === '5'
+        ? [mypakClient.packJobCorrection.bind(mypakClient), mypakClient.packJobChecking.bind(mypakClient)]
+        : ['4','6'].includes(job.status)
+          ? [mypakClient.packJobDistribution.bind(mypakClient), mypakClient.packJobChecking.bind(mypakClient)]
+          : [mypakClient.packJobChecking.bind(mypakClient), mypakClient.packJobDistribution.bind(mypakClient)];
+      let response; let lastError;
+      for (const load of loaders) { try { response = await load(job.jobId); break; } catch (error) { lastError = error; } }
+      if (!response) throw lastError;
+      const detail = normalizePackDose(response);
+      store.mypakPackContents[job.jobId] = detail; detailsByJob[job.jobId] = detail;
+    } catch (error) {
+      if (store.mypakPackContents[job.jobId]) detailsByJob[job.jobId] = store.mypakPackContents[job.jobId];
+      else job.detailError = publicMyPakError(error).error;
+    }
+  }
+  const approved = analysis.changes.filter(change => change.pharmacistDecision === 'Approved');
+  const changes = approved.length ? approved : analysis.changes.filter(change => change.pharmacistDecision !== 'Rejected');
+  const impact = buildPackImpact({ jobs, detailsByJob, changes });
+  analysis.packImpact = impact; analysis.packImpactUpdatedAt = nowISO();
+  audit(store, 'Refreshed read-only MyPak pack impact', { patient: patient.fullName, analysisId: analysis.id, packJobs: jobs.length, source: 'MyPak read-only' });
+  writeStore(store); res.json({ analysis, jobs: impact, usedApprovedChanges: approved.length > 0 });
+});
+
+app.get('/api/doctor-change/analyses/:id/worksheet', (req, res) => {
+  const store = readStore(); const analysis = store.doctorChangeAnalyses.find(item => item.id === req.params.id);
+  if (!analysis) return res.status(404).send('Doctor change analysis not found');
+  if (analysis.status !== 'Approved for pack worksheet' || !analysis.changes.some(change => change.pharmacistDecision === 'Approved') || !analysis.packImpactUpdatedAt) return res.status(409).send('Approve at least one medication change and refresh affected packs before printing the worksheet.');
+  const rows = (analysis.packImpact || []).flatMap(job => (job.instructions || []).flatMap(instruction => {
+    const cells = instruction.cells?.length ? instruction.cells : [{}];
+    return cells.map(cell => `<tr><td>${htmlEsc(job.barcode || job.jobId)}</td><td>${htmlEsc(dateDisplay(job.packStartDate))}<br>${htmlEsc(job.statusLabel)}</td><td><b>${htmlEsc(instruction.action)}</b> ${htmlEsc(instruction.matchedMedication || instruction.medication)}</td><td>${htmlEsc(cell.date ? dateDisplay(cell.date) : 'Pharmacist to specify')}</td><td>${htmlEsc(cell.day || '')}</td><td>${htmlEsc(cell.doseTime || '')}</td><td>${htmlEsc(cell.quantity ?? '')}</td><td>${htmlEsc(instruction.newDirection || instruction.previousDirection || '')}</td></tr>`);
+  })).join('');
+  res.type('html').send(`<!doctype html><html><head><title>Pack Amendment Worksheet</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial;color:#15231f;font-size:10px}h1{font-size:20px}.notice{padding:10px;border:2px solid #a22218;background:#fff2f0}.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:12px 0}table{width:100%;border-collapse:collapse}th,td{border:1px solid #777;padding:5px;vertical-align:top}th{background:#e9f4ed}.sign{margin-top:20px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px}.print{margin-bottom:10px}@media print{.print{display:none}}</style></head><body><button class="print" onclick="window.print()">Print / Save PDF</button><h1>Pack Amendment Worksheet — pharmacist-approved work instruction</h1><div class="notice"><b>Safety:</b> Confirm the doctor source, current prescription and physical pack before changing or supplying any dose.</div><div class="meta"><div><b>Patient:</b> ${htmlEsc(analysis.patientFullName)}</div><div><b>Source:</b> ${htmlEsc(analysis.sourceName)}</div><div><b>Analysis date:</b> ${htmlEsc(dateDisplay(analysis.createdAt))}</div><div><b>Pack data refreshed:</b> ${htmlEsc(analysis.packImpactUpdatedAt ? new Date(analysis.packImpactUpdatedAt).toLocaleString('en-AU') : 'Not refreshed')}</div></div><p><b>Summary:</b> ${htmlEsc(analysis.documentSummary)}</p><table><thead><tr><th>Pack / barcode</th><th>Start / status</th><th>Action & medicine</th><th>Exact date</th><th>Day</th><th>Compartment</th><th>Qty</th><th>New direction</th></tr></thead><tbody>${rows || '<tr><td colspan="8">No approved pack instructions. Review changes and refresh pack impact first.</td></tr>'}</tbody></table><div class="sign"><div>Packed / amended by: __________________</div><div>Checked by pharmacist: __________________</div><div>Date / time: __________________</div></div></body></html>`);
 });
 app.post('/api/script-request', (req, res) => {
   const store = readStore();
