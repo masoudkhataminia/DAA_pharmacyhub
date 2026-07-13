@@ -10,3 +10,4 @@ build
 *.tsbuildinfo
 data/store.json
 data/mypak-*.json
+data/mps-*.json

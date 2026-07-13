@@ -1,6 +1,7 @@
 let STATE = null;
 let selectedPatientId = null;
 let editPatientId = null;
+let MPS_CONNECTION = null;
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -15,7 +16,8 @@ function statusClass(p){
   return 'ok';
 }
 function patientBadges(p){
-  return [badge(p.calculatedStatus||'Unknown', statusClass(p)), p.mypakPatientId?badge('MyPak live','mint'):'', p.patientGroup?badge(p.patientGroup,'blue'):'', p.s8Priority?badge('S8','danger'):'', p.patientSuppliedMeds?badge('Patient supplied','blue'):'', p.urgent?badge('Urgent','danger'):'', p.scriptRequestStatus && p.scriptRequestStatus!=='Not checked'?badge(p.scriptRequestStatus,'warn'):'' ].join('');
+  const stream = p.packingStream || (p.mpsPatientId ? 'Sachet' : 'WP');
+  return [badge(p.calculatedStatus||'Unknown', statusClass(p)), badge(stream, stream==='Sachet'?'blue':'mint'), p.mypakPatientId?badge('MyPak live','mint'):'', p.mpsPatientId?badge('MPS live','blue'):'', p.patientGroup?badge(p.patientGroup,'blue'):'', p.s8Priority?badge('S8','danger'):'', p.patientSuppliedMeds?badge('Patient supplied','blue'):'', p.urgent?badge('Urgent','danger'):'', p.scriptRequestStatus && p.scriptRequestStatus!=='Not checked'?badge(p.scriptRequestStatus,'warn'):'' ].join('');
 }
 function queueCard(p, mode='pickup'){
   if(mode==='dispense' && p.medications) return `<div class="queue-card dispense-card"><div><h3>${esc(p.fullName)}</h3><p><b>${p.medications.length}</b> medicines need dispensing · lowest balance <b>${esc(p.worstBalance)}</b></p><div class="badges">${badge(p.status.replaceAll('_',' '),p.status==='confirmed'?'ok':p.status==='dispensed'?'blue':'danger')} ${p.patientGroup?badge(p.patientGroup,'mint'):''}</div></div><div class="card-actions"><button class="ghost" onclick="openDispensePatient('${p.key}','${p.patientId}')">Balances</button>${p.status==='needs_dispense'?`<button onclick="setDispenseStatus('${p.key}','dispensed')">Dispensed</button>`:p.status==='dispensed'?`<button onclick="setDispenseStatus('${p.key}','confirmed')">Confirm ✓</button>`:`<button class="ghost" onclick="setDispenseStatus('${p.key}','needs_dispense')">Reopen</button>`}</div></div>`;
@@ -47,17 +49,28 @@ function patientValue(value){ return value === null || value === undefined || va
 function patientDemographics(p){
   const fields = [
     ['Date of birth', p.dob], ['Gender', p.gender], ['Address', patientAddress(p)], ['Phone', p.phone],
-    ['Patient group', p.patientGroup], ['Room', p.room], ['Facility / ward', p.facilityWard], ['Dispense code', p.dispenseCode],
+    ['Packing stream', p.packingStream || (p.mpsPatientId ? 'Sachet' : 'WP')], ['Patient group', p.patientGroup], ['Room', p.room], ['Facility / ward', p.facilityWard], ['Dispense code', p.dispenseCode],
     ['Distribution', p.distribution], ['DAA funding', p.daaFunding], ['MyPak status', p.mypakPatientStatus], ['Packing status', p.mypakPackingStatus],
     ['MyPak patient ID', p.mypakPatientId], ['External patient ID', p.mypakExternalPatientId || p.externalId],
+    ['MPS patient ID', p.mpsPatientId], ['MPS facility / wing', p.facilityWard], ['MPS active', p.mpsPatientId ? (p.mpsActive ? 'Yes' : 'No') : '—'],
     ['Vision impaired', p.mypakMetadata?.visionImpaired ? 'Yes' : 'No'], ['30-day dispensing', p.mypakMetadata?.days30Dispensing ? 'Yes' : 'No'],
-    ['Last checked', p.mypakMetadata?.lastCheckedDate], ['Last MyPak sync', p.lastMyPakSyncAt ? new Date(p.lastMyPakSyncAt).toLocaleString() : '—']
+    ['Last checked', p.mypakMetadata?.lastCheckedDate], ['Last MyPak sync', p.lastMyPakSyncAt ? new Date(p.lastMyPakSyncAt).toLocaleString() : '—'],
+    ['Last MPS sync', p.lastMpsSyncAt ? new Date(p.lastMpsSyncAt).toLocaleString() : '—']
   ];
   return `<h3>Patient information</h3><table><tbody>${fields.map(([label,value])=>`<tr><th>${esc(label)}</th><td>${esc(patientValue(value))}</td></tr>`).join('')}</tbody></table>`;
 }
 function myPakMedicationBalances(rows){
   const scriptState = m => m.owing ? badge('OWING','danger') : m.requestFlag==='New script required' ? badge('New script required','warn') : m.requestFlag==='Low repeats' ? badge('Low repeats','warn') : m.requestFlag==='OK' ? badge('OK','ok') : m.newScriptNeeded===true ? badge('New script needed','warn') : m.newScriptNeeded===false ? badge('OK','ok') : '—';
   return rows?.length ? `<table><thead><tr><th>Medication</th><th>Directions</th><th>Current balance</th><th>Required / week</th><th>Repeats</th><th>Script</th><th>Last update</th></tr></thead><tbody>${rows.map(m=>`<tr><td><b>${esc(m.medication||'—')}</b><br><small>${esc(m.drugCode||'')}</small></td><td>${esc(m.direction||'—')}</td><td>${esc(patientValue(m.balanceQty))}</td><td>${esc(patientValue(m.weeklyQty))}</td><td><b>${esc(patientValue(m.repeatsLeft))}</b>${m.repeatSource?`<br><small>${esc(m.repeatSource)}</small>`:''}</td><td>${scriptState(m)}${m.scriptNumber?`<br><small>Script ${esc(m.scriptNumber)}</small>`:''}</td><td>${esc(m.lastDispenseBalanceUpdated ? new Date(m.lastDispenseBalanceUpdated).toLocaleString() : '—')}</td></tr>`).join('')}</tbody></table>` : empty('No MyPak medication balance is available for this patient.');
+}
+function mpsMedicationSummary(details){
+  const packedDays = details.mpsPackedDays || [];
+  const packedPrn = details.mpsPackedPrn || [];
+  const orders = details.mpsOrders || [];
+  if (!packedDays.length && !packedPrn.length && !orders.length) return empty('No synced MPS medication data is available for this resident.');
+  const dayRows = packedDays.map(day=>`<tr><td>${esc(day.packDate ? new Date(day.packDate).toLocaleDateString('en-AU') : '—')}</td><td>${esc((day.packedMedications||[]).length)}</td><td>${esc(day.facilityId||'—')}</td><td>${esc(day.changeNumber||'—')}</td></tr>`).join('');
+  const orderRows = orders.slice(0,100).map(order=>`<tr><td>${esc(order.createdAt||order.orderDate||order.lastUpdated||'—')}</td><td>${esc(order.medicationName||order.drugName||order.medication?.name||order.drug?.name||`Medication ${order.medicationId||'—'}`)}</td><td>${esc(order.status||order.orderStatus||'—')}</td></tr>`).join('');
+  return `<div class="three-col"><div><h4>Packed days (${packedDays.length})</h4>${dayRows?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Doses</th><th>Facility</th><th>Change #</th></tr></thead><tbody>${dayRows}</tbody></table></div>`:empty('No packed days.')}</div><div><h4>PRN records</h4><p><b>${esc(packedPrn.length)}</b> synced PRN record(s)</p></div><div><h4>Orders (${orders.length})</h4>${orderRows?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Medicine</th><th>Status</th></tr></thead><tbody>${orderRows}</tbody></table></div>`:empty('No orders.')}</div></div>`;
 }
 function renderImportReview(){
   const rows = STATE.importReviews || [];
@@ -100,12 +113,77 @@ async function syncMyPakPatients({silent=false}={}){
     await refreshMyPakStatus();
   }
 }
+async function refreshMpsStatus(){
+  try {
+    const [connection, sync] = await Promise.all([api('/api/mps/status'), api('/api/mps/sync/status')]);
+    MPS_CONNECTION = connection;
+    $('#mpsConnection').textContent = connection.online ? 'Online' : !connection.configured ? 'Offline · token not configured' : connection.lastError ? 'Offline · authentication/request failed' : 'Configured · not verified';
+    const patientWhen = connection.lastPatientSyncAt ? new Date(connection.lastPatientSyncAt).toLocaleString() : 'never';
+    const medicationWhen = connection.lastMedicationSyncAt ? new Date(connection.lastMedicationSyncAt).toLocaleString() : 'never';
+    const offlineWhen = connection.lastOfflineImportAt ? new Date(connection.lastOfflineImportAt).toLocaleString() : 'never';
+    const progress = sync.running ? ` · ${sync.operation || 'sync'} page ${sync.currentPage}` : '';
+    const error = connection.lastError || sync.lastError;
+    $('#mpsSyncSummary').textContent = `Patients: ${connection.patientCount || 0} (live ${patientWhen}; offline import ${offlineWhen}) · Drugs: ${connection.drugCount || 0} · Orders: ${connection.orderCount || 0} · Packed days: ${connection.packedDayCount || 0} (last ${medicationWhen})${progress}${error ? ` · Error: ${error}` : ''}`;
+    $('#mpsPatientSyncBtn').disabled = !connection.configured || sync.running;
+    $('#mpsMedicationSyncBtn').disabled = !connection.configured || sync.running;
+    const sourceStatus = $('#mpsPatientSourceStatus');
+    if (sourceStatus) {
+      const cachedCount = patientPool().filter(patient => patient.mpsPatientId).length;
+      sourceStatus.classList.toggle('online', Boolean(connection.online));
+      sourceStatus.classList.toggle('offline', !connection.online);
+      sourceStatus.textContent = connection.online
+        ? `MPS Online · ${cachedCount} Sachet resident(s) saved locally · live sync available`
+        : `MPS Offline · ${cachedCount} Sachet resident(s) cached · search still works locally${cachedCount ? '' : ' · import an MPS CSV/XLSX export to add residents'}`;
+    }
+  } catch (error) { $('#mpsConnection').textContent = 'Status unavailable'; $('#mpsSyncSummary').textContent = error.message; }
+}
+async function connectMps(e){
+  e.preventDefault();
+  const form = e.currentTarget; const button = form.querySelector('button'); button.disabled = true;
+  const body = { token: $('#mpsToken').value };
+  try {
+    await api('/api/mps/session', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    $('#mpsToken').value = ''; toast('MPS MediSphere connected for this server session.'); await refreshMpsStatus();
+  } catch (error) { $('#mpsToken').value = ''; toast(error.message); }
+  finally { body.token = ''; button.disabled = false; }
+}
+async function syncMpsPatients(){
+  $('#mpsPatientSyncBtn').disabled = true;
+  const poll = setInterval(refreshMpsStatus, 750);
+  try { const result = await api('/api/mps/sync/patients', { method:'POST' }); toast(`MPS patient sync complete: ${result.total || 0} residents.`); await loadState(); }
+  catch (error) { toast(error.message); }
+  finally { clearInterval(poll); await refreshMpsStatus(); }
+}
+async function syncMpsMedications(){
+  $('#mpsMedicationSyncBtn').disabled = true;
+  const poll = setInterval(refreshMpsStatus, 750);
+  try { const result = await api('/api/mps/sync/medications', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({days:7}) }); toast(`MPS medication sync complete: ${result.packedDays || 0} packed days, ${result.orders || 0} orders.`); await loadState(); }
+  catch (error) { toast(error.message); }
+  finally { clearInterval(poll); await refreshMpsStatus(); }
+}
+async function importOfflineMpsPatients(e){
+  e.preventDefault();
+  const form = e.currentTarget; const button = form.querySelector('button'); button.disabled = true;
+  try {
+    const result = await api('/api/mps/import/patients', { method:'POST', body:new FormData(form) });
+    form.reset();
+    toast(`MPS offline import complete: ${result.recordsAdded || 0} added, ${result.recordsUpdated || 0} updated.`);
+    await loadState(); await refreshMpsStatus(); showView('patients');
+    $('#patientFilter').value = 'sachet'; renderPatients();
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+}
+function patientPool(){ return STATE?.allPatientsComputed || STATE?.patientsComputed || []; }
 function filteredPatients(){
   const q = ($('#patientSearch')?.value||'').toLowerCase();
   const f = $('#patientFilter')?.value||'all';
   if(q.trim().length < 2 && f==='all') return [];
-  return (STATE.patientsComputed||[]).filter(p=>{
-    if(q && !(`${p.fullName} ${p.phone} ${p.notes} ${p.patientGroup} ${p.externalId} ${p.dispenseCode}`.toLowerCase().includes(q))) return false;
+  return patientPool().filter(p=>{
+    if(f==='inactive' && p.active!==false) return false;
+    if(f!=='inactive' && p.active===false) return false;
+    if(q && !(`${p.fullName} ${p.phone} ${p.notes} ${p.patientGroup} ${p.externalId} ${p.dispenseCode} ${p.mpsPatientId} ${p.room} ${p.facilityWard}`.toLowerCase().includes(q))) return false;
+    if(f==='sachet' && !p.mpsPatientId) return false;
+    if(f==='wp' && p.mpsPatientId) return false;
     if(f==='due' && !(p.daysToPickup!==null && p.daysToPickup<=7)) return false;
     if(f==='s8' && !p.s8Priority) return false;
     if(f==='supplied' && !p.patientSuppliedMeds) return false;
@@ -115,18 +193,23 @@ function filteredPatients(){
 }
 function renderPatients(){
   const pts = filteredPatients();
-  $('#patientTable').innerHTML = pts.length ? `<table><thead><tr><th>Name</th><th>Cycle</th><th>Last pickup</th><th>Next pickup</th><th>Pack</th><th>Dispense</th><th>Flags</th><th></th></tr></thead><tbody>${pts.map(p=>`<tr><td><button class="linkbtn" onclick="openPatient('${p.id}')">${esc(p.fullName)}</button><br><small>${esc(p.phone||'')}</small></td><td>${esc(p.cycleDays)} days</td><td>${esc(p.lastPickupDisplay||'—')}</td><td>${esc(p.nextPickupDisplay||'—')}<br><small>${esc(p.calculatedStatus)}</small></td><td>${esc(p.packStatus)}</td><td>${esc(p.dispenseStatus)}</td><td><div class="badges">${patientBadges(p)}</div></td><td><button class="ghost" onclick="editPatient('${p.id}')">Edit</button></td></tr>`).join('')}</tbody></table>` : empty(($('#patientSearch')?.value||'').trim().length<2?'Type at least 2 letters to search patients.':'No matching patients.');
+  const summary = $('#patientResultSummary'); if(summary) summary.textContent = `${pts.length} matching resident(s) · ${patientPool().filter(p=>p.mpsPatientId).length} Sachet · ${patientPool().filter(p=>!p.mpsPatientId).length} WP`;
+  const sachetSelected = $('#patientFilter')?.value === 'sachet';
+  const noRows = sachetSelected && !patientPool().some(patient=>patient.mpsPatientId)
+    ? 'No MPS/Sachet residents are saved yet. MPS is offline; use the Offline fallback import in Import Centre, or connect a valid MediSphere token and run Sync MPS patients.'
+    : (($('#patientSearch')?.value||'').trim().length<2 && $('#patientFilter')?.value==='all' ? 'Type at least 2 letters to search patients.' : 'No matching patients.');
+  $('#patientTable').innerHTML = pts.length ? `<table><thead><tr><th>Name</th><th>Cycle</th><th>Last pickup</th><th>Next pickup</th><th>Pack</th><th>Dispense</th><th>Flags</th><th></th></tr></thead><tbody>${pts.map(p=>`<tr><td><button class="linkbtn" onclick="openPatient('${p.id}')">${esc(p.fullName)}</button><br><small>${esc(p.phone||'')}</small></td><td>${esc(p.cycleDays)} days</td><td>${esc(p.lastPickupDisplay||'—')}</td><td>${esc(p.nextPickupDisplay||'—')}<br><small>${esc(p.calculatedStatus)}</small></td><td>${esc(p.packStatus)}</td><td>${esc(p.dispenseStatus)}</td><td><div class="badges">${patientBadges(p)}</div></td><td><button class="ghost" onclick="editPatient('${p.id}')">Edit</button></td></tr>`).join('')}</tbody></table>` : empty(noRows);
 }
 async function openPatient(id){
   selectedPatientId = id;
   const d = await api(`/api/patients/${id}/details`);
   const p = d.patient;
   $('#patientDetails').classList.remove('hidden');
-  $('#patientDetails').innerHTML = `<div class="panel-head"><h2>${esc(p.fullName)}</h2><span>${esc(p.calculatedStatus)} · Risk ${esc(p.riskScore)}</span></div><div class="two-col"><div><h3>Workflow</h3><p>Last pickup: <b>${esc(p.lastPickupDisplay||'not set')}</b><br>Next pickup: <b>${esc(p.nextPickupDisplay||'not set')}</b><br>Pack due: <b>${esc(p.packDueDisplay||'—')}</b><br>Dispense due: <b>${esc(p.dispenseDueDisplay||'—')}</b><br>Order due: <b>${esc(p.orderDueDisplay||'—')}</b></p><div class="badges">${patientBadges(p)}</div><p>${esc(p.notes||'')}</p><button onclick="editPatient('${p.id}')">Edit workflow</button> <button class="ghost" onclick="buildRequestForPatient('${p.id}')">Build script request</button></div><div>${patientDemographics(p)}</div></div><h3>MyPak medications & pill balance</h3>${myPakMedicationBalances(d.medicationBalances)}<h3>Imported medication list</h3>${d.medications.length?`<table><tbody>${d.medications.map(m=>`<tr><td>${esc(m.medicineName)}</td><td>${esc(m.directions)}</td></tr>`).join('')}</tbody></table>`:empty('No medications imported for this patient.')}<h3>Scripts</h3>${d.scripts.length?`<table><thead><tr><th>Drug</th><th>Repeats</th><th>Owing</th><th>Flag</th></tr></thead><tbody>${d.scripts.map(s=>`<tr><td>${esc(s.drugDescription)}</td><td>${esc(s.repeatsLeft)}</td><td>${s.owing?'Yes':'No'}</td><td>${badge(s.requestFlag, s.requestFlag==='OK'?'ok':'warn')}</td></tr>`).join('')}</tbody></table>`:empty('No scripts imported.')}`;
+  $('#patientDetails').innerHTML = `<div class="panel-head"><h2>${esc(p.fullName)}</h2><span>${esc(p.calculatedStatus)} · Risk ${esc(p.riskScore)}</span></div><div class="two-col"><div><h3>Workflow</h3><p>Last pickup: <b>${esc(p.lastPickupDisplay||'not set')}</b><br>Next pickup: <b>${esc(p.nextPickupDisplay||'not set')}</b><br>Pack due: <b>${esc(p.packDueDisplay||'—')}</b><br>Dispense due: <b>${esc(p.dispenseDueDisplay||'—')}</b><br>Order due: <b>${esc(p.orderDueDisplay||'—')}</b></p><div class="badges">${patientBadges(p)}</div><p>${esc(p.notes||'')}</p><button onclick="editPatient('${p.id}')">Edit workflow</button> <button class="ghost" onclick="buildRequestForPatient('${p.id}')">Build script request</button></div><div>${patientDemographics(p)}</div></div><h3>MPS medication data</h3>${mpsMedicationSummary(d)}<h3>MyPak medications & pill balance</h3>${myPakMedicationBalances(d.medicationBalances)}<h3>Imported medication list</h3>${d.medications.length?`<table><tbody>${d.medications.map(m=>`<tr><td>${esc(m.medicineName)}</td><td>${esc(m.directions)}</td></tr>`).join('')}</tbody></table>`:empty('No medications imported for this patient.')}<h3>Scripts</h3>${d.scripts.length?`<table><thead><tr><th>Drug</th><th>Repeats</th><th>Owing</th><th>Flag</th></tr></thead><tbody>${d.scripts.map(s=>`<tr><td>${esc(s.drugDescription)}</td><td>${esc(s.repeatsLeft)}</td><td>${s.owing?'Yes':'No'}</td><td>${badge(s.requestFlag, s.requestFlag==='OK'?'ok':'warn')}</td></tr>`).join('')}</tbody></table>`:empty('No scripts imported.')}`;
   showView('patients');
 }
 function editPatient(id){
-  const p = STATE.patientsComputed.find(x=>x.id===id); if(!p) return;
+  const p = patientPool().find(x=>x.id===id); if(!p) return;
   editPatientId = id;
   const fields = [
     ['fullName','Full name','text'],['cycleDays','Pickup interval days','number'],['lastPickupDate','Last pickup date','date'],['packLeadDays','Pack lead days','number'],['dispenseLeadDays','Dispense lead days','number'],['orderLeadDays','Medicine order lead days','number'],
@@ -418,6 +501,10 @@ $$('.nav').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
 $('#refreshBtn').addEventListener('click',()=>syncMyPakPatients());
 $('#mypakSyncBtn').addEventListener('click',syncMyPakPatients);
 $('#mypakSyncBtnSettings').addEventListener('click',syncMyPakPatients);
+$('#mpsTokenForm').addEventListener('submit',connectMps);
+$('#mpsPatientSyncBtn').addEventListener('click',syncMpsPatients);
+$('#mpsMedicationSyncBtn').addEventListener('click',syncMpsMedications);
+$('#mpsOfflineImportForm').addEventListener('submit',importOfflineMpsPatients);
 $$('form.upload-card').forEach(f=>f.addEventListener('submit',importForm));
 $$('form.quick-report-upload').forEach(f=>f.addEventListener('submit',importForm));
 $('#patientSearch').addEventListener('input',renderPatients); $('#patientFilter').addEventListener('change',renderPatients);
@@ -429,4 +516,4 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
-loadState().then(async()=>{await refreshMyPakStatus();await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));
+loadState().then(async()=>{await Promise.all([refreshMyPakStatus(),refreshMpsStatus()]);await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));

@@ -21,3 +21,13 @@ Letter template follows the Hibiscus Pharmacy “New Prescription Required” wo
 - Preserved existing Dashboard, Import Centre, Patients, Script Requests and Doctor Updates workflow.
 
 Tested locally with the user supplied List of Patients, List of Scripts and Pack Management Record pasted text.
+
+## MPS MediSphere / Sachet integration
+
+- Adds read-only MPS patient, facility, medication, packed-day and order synchronisation.
+- Labels MPS residents as `Sachet` and existing Webster Pack residents as `WP`.
+- Keeps locally cached Sachet residents searchable when MPS is offline.
+- Supports CSV/XLSX MPS patient exports as an offline fallback.
+- Holds live MPS bearer tokens in server memory only; tokens are not stored or returned to the browser.
+
+See `docs/MPS_CONNECTOR.md` for setup, supported endpoints and safety constraints.
