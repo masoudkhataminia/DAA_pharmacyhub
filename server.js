@@ -10,7 +10,7 @@ import { MyPakClient } from './services/mypak/client.js';
 import { MyPakSyncService } from './services/mypak/sync.js';
 import { publicMyPakError } from './services/mypak/errors.js';
 import { normalizeMyPakMedicationBalance } from './services/mypak/mapper.js';
-import { normalizePackDose, patientPackJobs } from './services/mypak/packs.js';
+import { mergePackJobs, normalizePackDose, packRows, patientPackJobs } from './services/mypak/packs.js';
 import { analyseDoctorChange, doctorChangeAiStatus } from './services/doctor-change/analysis.js';
 import { buildPackImpact } from './services/doctor-change/impact.js';
 import { MpsClient } from './services/mps/client.js';
@@ -73,6 +73,7 @@ const DEFAULT_STORE = {
   mypakDispenseHistory: [],
   mypakPackJobs: [],
   mypakPackContents: {},
+  mypakPackSummary: {},
   mpsFacilityGroups: [],
   mpsFacilities: [],
   mpsDrugs: [],
@@ -170,6 +171,15 @@ const mypakClient = new MyPakClient();
 const mypakSyncService = new MyPakSyncService({ client: mypakClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
 const mpsClient = new MpsClient();
 const mpsSyncService = new MpsSyncService({ client: mpsClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
+
+async function refreshPatientPackJobs(store, patient) {
+  if (!patient?.mypakPatientId) return [];
+  const createdDateTo = new Date(); const createdDateFrom = new Date(createdDateTo); createdDateFrom.setFullYear(createdDateFrom.getFullYear() - 1);
+  const response = await mypakClient.listPackJobs({ pageIndex: 1, pageSize: 99999, status: ['0','1','2','3','4','5','6','7'], patientIds: [patient.mypakPatientId], patientGroupIds: [], createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString(), sortField: 'CreatedDate', sortOrder: -1 });
+  const incoming = packRows(response);
+  store.mypakPackJobs = mergePackJobs(store.mypakPackJobs, incoming);
+  return patientPackJobs(store, patient);
+}
 
 function sendMyPakError(res, error) {
   const safe = publicMyPakError(error);
@@ -1104,10 +1114,18 @@ app.get('/api/patients/:id/details', (req, res) => {
     scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id)
   });
 });
-app.get('/api/patients/:id/pack-jobs', (req, res) => {
+app.get('/api/patients/:id/pack-jobs', async (req, res) => {
   const store = readStore(); const patient = store.patients.find(item => item.id === req.params.id);
   if (!patient) return res.status(404).json({ error: 'Patient not found' });
-  res.json({ patientId: patient.id, jobs: patientPackJobs(store, patient), lastSyncAt: store.mypakSync?.lastSyncAt || null });
+  try {
+    const jobs = req.query.live === '0' ? patientPackJobs(store, patient) : await refreshPatientPackJobs(store, patient);
+    if (req.query.live !== '0') writeStore(store);
+    res.json({ patientId: patient.id, jobs, lastSyncAt: store.mypakSync?.lastSyncAt || null, live: req.query.live !== '0' });
+  } catch (error) {
+    const cached = patientPackJobs(store, patient);
+    if (cached.length) return res.json({ patientId: patient.id, jobs: cached, lastSyncAt: store.mypakSync?.lastSyncAt || null, live: false, warning: publicMyPakError(error).error });
+    sendMyPakError(res, error);
+  }
 });
 
 app.get('/api/doctor-change/ai-status', (_, res) => res.json(doctorChangeAiStatus()));
@@ -1141,7 +1159,8 @@ app.post('/api/doctor-change/analyses/:id/pack-impact', async (req, res) => {
   if (!analysis) return res.status(404).json({ error: 'Doctor change analysis not found' });
   const patient = store.patients.find(item => item.id === analysis.patientId);
   if (!patient) return res.status(404).json({ error: 'Patient not found' });
-  const today = todayDate(), earliest = addDays(today, -14), latest = addDays(today, 62);
+  try { await refreshPatientPackJobs(store, patient); } catch {}
+  const today = todayDate(), earliest = addDays(today, -35), latest = addDays(today, 62);
   const jobs = patientPackJobs(store, patient).filter(job => { const date = parseDate(job.packStartDate); return date && date >= earliest && date <= latest; }).slice(0, 16);
   store.mypakPackContents ||= {};
   const detailsByJob = {};

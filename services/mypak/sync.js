@@ -1,5 +1,4 @@
 import { mergeMyPakPatients, normalizeMyPakMedicationBalance } from './mapper.js';
-import { mergePackJobs, packRows } from './packs.js';
 
 const initialStatus = () => ({ running: false, progress: 0, currentPage: 0, pagesCompleted: 0, recordsProcessed: 0, recordsAdded: 0, recordsUpdated: 0, recordsSkipped: 0, lastError: null, startedAt: null, finishedAt: null });
 
@@ -21,20 +20,33 @@ export class MyPakSyncService {
         if (!pageRows.length || (total !== null && rows.length >= total)) break;
         if (pageIndex === this.maxPages) throw new Error('MyPak pagination safety limit reached');
       }
-      const balanceResponse = await this.client.listVirtualPillBalances({ pageIndex: 1, pageSize: 99999, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] });
-      const balances = Array.isArray(balanceResponse.data) ? balanceResponse.data : [];
+      const balances = [];
+      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
+        const response = await this.client.listVirtualPillBalances({ pageIndex, pageSize: this.pageSize, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] });
+        const pageRows = Array.isArray(response.data) ? response.data : [];
+        const balanceTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
+        balances.push(...pageRows);
+        if (!pageRows.length || (balanceTotal !== null && balances.length >= balanceTotal)) break;
+        if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
+      }
       const insufficientResponse = await this.client.listInsufficientPillBalances({ patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString() });
       const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
       const doctorsResponse = await this.client.listDoctors();
       const doctors = Array.isArray(doctorsResponse.data) ? doctorsResponse.data : [];
+      const dispenseHistory = [];
       const today = new Date(); const from = new Date(today); from.setDate(from.getDate() - 90);
-      const dispenseResponse = await this.client.listDispenseTracking({ pageIndex: 1, pageSize: 99999, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
-      const dispenseHistory = Array.isArray(dispenseResponse.data) ? dispenseResponse.data : [];
+      for (let pageIndex = 1; pageIndex <= 50; pageIndex++) {
+        const response = await this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
+        const pageRows = Array.isArray(response.data) ? response.data : [];
+        const dispenseTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
+        dispenseHistory.push(...pageRows);
+        if (!pageRows.length || (dispenseTotal !== null && dispenseHistory.length >= dispenseTotal)) break;
+        if (pageIndex === 50) throw new Error('MyPak dispense history pagination safety limit reached');
+      }
       const createdDateTo = new Date(); const createdDateFrom = new Date(createdDateTo); createdDateFrom.setDate(createdDateFrom.getDate() - 120);
-      // MyPak's own summary UI requests large snapshots. One snapshot avoids dozens of slow
-      // 200-row calls while remaining bounded to the confirmed 120-day read-only window.
-      const packResponse = await this.client.listPackJobs({ pageIndex: 1, pageSize: 99999, status: ['0','1','2','3','4','5','6','7'], patientGroupIds: [], createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString(), sortField: 'CreatedDate', sortOrder: -1 });
-      const packJobs = packRows(packResponse);
+      const packSummaryResponse = await this.client.packJobSummary({ pageIndex: 1, pageSize: 99999, createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString() });
+      const packSummary = packSummaryResponse.data || {};
+      const totalPackJobs = ['printingCount','packingCount','correctionCount','checkingCount','distributionCount','failedCount','completeCount'].reduce((sum, name) => sum + Number(packSummary[name] || 0), 0);
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
       store.mypakMedicationBalances = [...new Map(balances.map(rawRow => {
         const row = normalizeMyPakMedicationBalance(rawRow);
@@ -43,8 +55,8 @@ export class MyPakSyncService {
       store.mypakPrescriptions = store.mypakMedicationBalances.map(row => ({ ...row, prescriptionId: row.prescriptionId || row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`, lastDispenseDate: row.lastDispenseDate || row.lastDispenseBalanceUpdated || '', isInsufficientPillBalance: insufficient.get(String(row.prescriptionId || row.vpBalanceId)) || Number(row.balanceQty) < 0 }));
       store.mypakDoctors = [...new Map(doctors.map(row => [String(row.doctorId), row])).values()];
       store.mypakDispenseHistory = [...new Map(dispenseHistory.map(row => [String(row.scriptTrackingId), row])).values()];
-      store.mypakPackJobs = mergePackJobs([], packJobs);
-      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, totalDispenseHistory: store.mypakDispenseHistory.length, totalPackJobs: store.mypakPackJobs.length, status: 'success' };
+      store.mypakPackSummary = packSummary;
+      store.mypakSync = { lastSyncAt: at, lastSuccessAt: at, lastError: null, totalPatients: rows.length, totalMedicationBalances: store.mypakMedicationBalances.length, totalPrescriptions: store.mypakPrescriptions.length, totalDoctors: store.mypakDoctors.length, totalDispenseHistory: store.mypakDispenseHistory.length, totalPackJobs, status: 'success' };
       this.writeStore(store); Object.assign(this.status, stats, { running: false, progress: 100, finishedAt: at });
       return { started: true, status: this.getStatus() };
     } catch (error) {
