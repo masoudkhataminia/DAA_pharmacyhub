@@ -25,16 +25,17 @@ function cycleDays(group, settings) {
 }
 
 function matches(row, patients) {
+  const sourcePatients = patients.filter(patient => text(patient.mypakPatientId));
   const mypakId = text(row.patientId);
-  let found = patients.filter(p => text(p.mypakPatientId) === mypakId && mypakId);
+  let found = sourcePatients.filter(p => text(p.mypakPatientId) === mypakId && mypakId);
   if (found.length) return { found, method: 'mypakPatientId', certain: found.length === 1 };
   const external = text(row.externalPatientId);
-  found = patients.filter(p => external && [p.mypakExternalPatientId, p.externalId].some(v => text(v) === external));
+  found = sourcePatients.filter(p => external && [p.mypakExternalPatientId, p.externalId].some(v => text(v) === external));
   if (found.length) return { found, method: 'externalPatientId', certain: found.length === 1 };
   const name = normalName(fullName(row)); const dob = isoDate(row.dob);
-  found = patients.filter(p => normalName(p.fullName || `${p.firstName || ''} ${p.lastName || ''}`) === name && dob && isoDate(p.dob) === dob);
+  found = sourcePatients.filter(p => normalName(p.fullName || `${p.firstName || ''} ${p.lastName || ''}`) === name && dob && isoDate(p.dob) === dob);
   if (found.length) return { found, method: 'nameDob', certain: found.length === 1 };
-  found = patients.filter(p => normalName(p.fullName || `${p.firstName || ''} ${p.lastName || ''}`) === name);
+  found = sourcePatients.filter(p => normalName(p.fullName || `${p.firstName || ''} ${p.lastName || ''}`) === name);
   return { found, method: 'nameOnly', certain: false };
 }
 
@@ -44,7 +45,7 @@ function demographics(row, at) {
     externalId: text(row.externalPatientId), firstName: text(row.firstName), lastName: text(row.lastName), fullName: fullName(row),
     dob: isoDate(row.dob), gender: text(row.gender), address: text(row.address), phone: text(row.phone), patientGroup: text(row.patientGroupName),
     mypakPackingStatus: row.packingStatus ?? null, mypakPatientStatus: row.patientStatus ?? null, dispenseCode: text(row.dispenseCode), room: text(row.room),
-    facilityWard: text(row.facilityWard), distribution: row.distribution ?? null, daaFunding: row.daaFunding ?? null, lastMyPakSyncAt: at,
+    facilityWard: text(row.facilityWard), distribution: row.distribution ?? null, daaFunding: row.daaFunding ?? null, packingStream: 'WP', packType: 'Webster Pack', lastMyPakSyncAt: at,
     myPakRawVersion: 1, mypakMetadata: { visionImpaired: Boolean(row.visionImpaired), days30Dispensing: Boolean(row.days30Dispensing), lastCheckedDate: row.lastCheckedDate || null, photoId: row.photoId || null }
   };
 }
@@ -63,7 +64,7 @@ export function mergeMyPakPatients(store, rows, at = new Date().toISOString()) {
       reviews.push({ id: crypto.randomUUID(), type: 'mypak', fullName: fullName(row), result: 'MyPak match needs review', severity: 'warning', action: `Not merged: ${match.found.length} possible ${match.method} match(es)`, source: 'MyPak', at });
     } else {
       const mapped = demographics(row, at);
-      const patient = { id: crypto.randomUUID(), ...mapped, packType: 'Webster/Sachet', cycleDays: cycleDays(row.patientGroupName, store.settings), lastPickupDate: '', packLeadDays: store.settings.defaultPackLeadDays, dispenseLeadDays: store.settings.defaultDispenseLeadDays, orderLeadDays: store.settings.defaultOrderLeadDays, packStatus: 'Not started', dispenseStatus: 'Not dispensed', medicineOrderStatus: 'Not checked', scriptRequestStatus: 'Not checked', patientSuppliedMeds: false, s8Priority: false, urgent: false, notes: '', active: true, createdAt: at, updatedAt: at };
+      const patient = { id: crypto.randomUUID(), ...mapped, cycleDays: cycleDays(row.patientGroupName, store.settings), lastPickupDate: '', packLeadDays: store.settings.defaultPackLeadDays, dispenseLeadDays: store.settings.defaultDispenseLeadDays, orderLeadDays: store.settings.defaultOrderLeadDays, packStatus: 'Not started', dispenseStatus: 'Not dispensed', medicineOrderStatus: 'Not checked', scriptRequestStatus: 'Not checked', patientSuppliedMeds: false, s8Priority: false, urgent: false, notes: '', active: true, createdAt: at, updatedAt: at };
       store.patients.push(patient); seen.add(patient.id); stats.recordsAdded++;
     }
   }

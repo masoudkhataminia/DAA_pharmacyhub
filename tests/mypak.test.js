@@ -73,18 +73,29 @@ test('matches by MyPak ID and preserves workflow fields', () => {
 });
 
 test('matches by external ID', () => {
-  const existing = { id: 'local', externalId: 'EXT-10', fullName: 'Different Person', active: true }; const s = store([existing]);
+  const existing = { id: 'local', mypakPatientId: 'old-id', externalId: 'EXT-10', fullName: 'Different Person', active: true }; const s = store([existing]);
   const result = mergeMyPakPatients(s, [row()]); assert.equal(result.recordsUpdated, 1); assert.equal(s.patients.length, 1); assert.equal(existing.mypakPatientId, '10');
 });
 
 test('adds a normal local patient with defaults', () => {
   const s = store([]); const result = mergeMyPakPatients(s, [row()]);
-  assert.equal(result.recordsAdded, 1); assert.ok(s.patients[0].id); assert.equal(s.patients[0].cycleDays, 14); assert.equal(s.patients[0].notes, ''); assert.equal(s.patients[0].packStatus, 'Not started');
+  assert.equal(result.recordsAdded, 1); assert.ok(s.patients[0].id); assert.equal(s.patients[0].cycleDays, 14); assert.equal(s.patients[0].notes, ''); assert.equal(s.patients[0].packStatus, 'Not started'); assert.equal(s.patients[0].packingStream, 'WP'); assert.equal(s.patients[0].packType, 'Webster Pack');
 });
 
 test('name-only and duplicate matches go to review without merging', () => {
-  const s = store([{ id: 'a', fullName: 'Jane Citizen' }, { id: 'b', fullName: 'Jane Citizen' }]); const result = mergeMyPakPatients(s, [row({ externalPatientId: '' })]);
+  const s = store([{ id: 'a', mypakPatientId: 'old-a', fullName: 'Jane Citizen' }, { id: 'b', mypakPatientId: 'old-b', fullName: 'Jane Citizen' }]); const result = mergeMyPakPatients(s, [row({ externalPatientId: '' })]);
   assert.equal(result.recordsSkipped, 1); assert.equal(s.patients.length, 2); assert.match(s.importReviews[0].action, /Not merged/);
+});
+
+test('MyPak patients never merge into MPS Sachet residents', () => {
+  const sachetPatient = { id: 'sachet-only', mpsPatientId: '101', externalId: 'EXT-10', fullName: 'Jane Citizen', dob: '1980-04-03', packingStream: 'Sachet', active: true };
+  const s = store([sachetPatient]);
+  const result = mergeMyPakPatients(s, [row()]);
+  assert.equal(result.recordsAdded, 1);
+  assert.equal(result.recordsUpdated, 0);
+  assert.equal(s.patients.length, 2);
+  assert.equal(sachetPatient.mypakPatientId, undefined);
+  assert.equal(s.patients[1].packingStream, 'WP');
 });
 
 test('pagination is sequential across patient and pill balance pages', async () => {

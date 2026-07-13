@@ -13,17 +13,18 @@ const address = row => {
 };
 
 function matches(row, patients) {
+  const sourcePatients = patients.filter(patient => text(patient.mpsPatientId));
   const id = mpsId(row);
-  let found = patients.filter(patient => id && text(patient.mpsPatientId) === id);
+  let found = sourcePatients.filter(patient => id && text(patient.mpsPatientId) === id);
   if (found.length) return { found, method: 'mpsPatientId', certain: found.length === 1 };
   const external = externalId(row);
-  found = patients.filter(patient => external && [patient.mpsExternalPatientId, patient.externalId].some(value => text(value) === external));
+  found = sourcePatients.filter(patient => external && [patient.mpsExternalPatientId, patient.externalId].some(value => text(value) === external));
   if (found.length) return { found, method: 'externalPatientId', certain: found.length === 1 };
   const name = normalMpsName(fullName(row));
   const dob = isoDate(row.dateOfBirth ?? row.dob);
-  found = patients.filter(patient => normalMpsName(patient.fullName || `${patient.firstName || ''} ${patient.lastName || ''}`) === name && dob && isoDate(patient.dob) === dob);
+  found = sourcePatients.filter(patient => normalMpsName(patient.fullName || `${patient.firstName || ''} ${patient.lastName || ''}`) === name && dob && isoDate(patient.dob) === dob);
   if (found.length) return { found, method: 'nameDob', certain: found.length === 1 };
-  found = patients.filter(patient => normalMpsName(patient.fullName || `${patient.firstName || ''} ${patient.lastName || ''}`) === name);
+  found = sourcePatients.filter(patient => normalMpsName(patient.fullName || `${patient.firstName || ''} ${patient.lastName || ''}`) === name);
   return { found, method: 'nameOnly', certain: false };
 }
 

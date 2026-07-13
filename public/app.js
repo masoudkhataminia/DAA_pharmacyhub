@@ -25,8 +25,18 @@ function queueCard(p, mode='pickup'){
   return `<div class="queue-card"><div><h3>${esc(p.fullName)}</h3><p>${due} · cycle ${esc(p.cycleDays)} days · pickup ${esc(p.nextPickupDisplay||'not set')}</p><div class="badges">${patientBadges(p)}</div></div><button class="ghost" onclick="openPatient('${p.id}')">Open</button></div>`;
 }
 function renderKPIs(k){
-  const labels = [['activePatients','Active'],['needsDispense','Needs dispense'],['overdue','Overdue'],['dueThisWeek','Due this week'],['s8Priority','S8'],['openDoctorUpdates','Doctor updates'],['scriptIssues','Script issues'],['specialOrdersDue','Special orders due']];
-  $('#kpis').innerHTML = labels.map(([key,label])=>`<div class="kpi"><span>${label}</span><b>${k[key]??0}</b></div>`).join('');
+  const patients = STATE?.allPatientsComputed || STATE?.patientsComputed || [];
+  const sachetCount = patients.filter(patient=>patient.mpsPatientId).length;
+  const wpCount = patients.filter(patient=>!patient.mpsPatientId).length;
+  const values = { ...k, packingStreams: `${sachetCount} / ${wpCount}` };
+  const labels = [['activePatients','Active'],['needsDispense','Needs dispense'],['overdue','Overdue'],['dueThisWeek','Due this week'],['packingStreams','Sachet / WP'],['openDoctorUpdates','Doctor updates'],['scriptIssues','Script issues'],['specialOrdersDue','Special orders due']];
+  $('#kpis').innerHTML = labels.map(([key,label])=>`<div class="kpi${key==='packingStreams'?' kpi-action':''}" ${key==='packingStreams'?`role="button" tabindex="0" title="Sachet residents / Webster Pack residents" onclick="showPackingPatients()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showPackingPatients()}"`:''}><span>${label}</span><b>${values[key]??0}</b>${key==='packingStreams'?'<small>First: Sachet (MPS) · Second: WP</small>':''}</div>`).join('');
+}
+function showPackingPatients(){
+  showView('patients');
+  $('#patientFilter').value = 'all';
+  $('#patientSearch').value = '';
+  renderPatients();
 }
 async function setDispenseStatus(key,status){ await api(`/api/dispense-workflow/${encodeURIComponent(key)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}); toast(status==='confirmed'?'Dispense confirmed.':'Dispense workflow updated.'); await loadState(); }
 async function openDispensePatient(key,patientId){ if(patientId) return openPatient(patientId); const item=(STATE.dispenseQueue||[]).find(x=>x.key===key); if(item) toast(`${item.fullName}: ${item.medications.length} medicines need dispensing.`); }
@@ -177,7 +187,6 @@ function patientPool(){ return STATE?.allPatientsComputed || STATE?.patientsComp
 function filteredPatients(){
   const q = ($('#patientSearch')?.value||'').toLowerCase();
   const f = $('#patientFilter')?.value||'all';
-  if(q.trim().length < 2 && f==='all') return [];
   return patientPool().filter(p=>{
     if(f==='inactive' && p.active!==false) return false;
     if(f!=='inactive' && p.active===false) return false;
@@ -189,15 +198,16 @@ function filteredPatients(){
     if(f==='supplied' && !p.patientSuppliedMeds) return false;
     if(f==='script' && !/draft|sent|required|owing|low|needed/i.test(p.scriptRequestStatus||'')) return false;
     return true;
-  }).slice(0,50);
+  });
 }
 function renderPatients(){
-  const pts = filteredPatients();
-  const summary = $('#patientResultSummary'); if(summary) summary.textContent = `${pts.length} matching resident(s) · ${patientPool().filter(p=>p.mpsPatientId).length} Sachet · ${patientPool().filter(p=>!p.mpsPatientId).length} WP`;
+  const matches = filteredPatients();
+  const pts = matches.slice(0,50);
+  const summary = $('#patientResultSummary'); if(summary) summary.textContent = `${matches.length} patient(s) in this filter${matches.length>50?' · showing first 50':''} · ${patientPool().filter(p=>p.mpsPatientId).length} Sachet · ${patientPool().filter(p=>!p.mpsPatientId).length} WP`;
   const sachetSelected = $('#patientFilter')?.value === 'sachet';
   const noRows = sachetSelected && !patientPool().some(patient=>patient.mpsPatientId)
     ? 'No MPS/Sachet residents are saved yet. MPS is offline; use the Offline fallback import in Import Centre, or connect a valid MediSphere token and run Sync MPS patients.'
-    : (($('#patientSearch')?.value||'').trim().length<2 && $('#patientFilter')?.value==='all' ? 'Type at least 2 letters to search patients.' : 'No matching patients.');
+    : 'No patients in this list.';
   $('#patientTable').innerHTML = pts.length ? `<table><thead><tr><th>Name</th><th>Cycle</th><th>Last pickup</th><th>Next pickup</th><th>Pack</th><th>Dispense</th><th>Flags</th><th></th></tr></thead><tbody>${pts.map(p=>`<tr><td><button class="linkbtn" onclick="openPatient('${p.id}')">${esc(p.fullName)}</button><br><small>${esc(p.phone||'')}</small></td><td>${esc(p.cycleDays)} days</td><td>${esc(p.lastPickupDisplay||'—')}</td><td>${esc(p.nextPickupDisplay||'—')}<br><small>${esc(p.calculatedStatus)}</small></td><td>${esc(p.packStatus)}</td><td>${esc(p.dispenseStatus)}</td><td><div class="badges">${patientBadges(p)}</div></td><td><button class="ghost" onclick="editPatient('${p.id}')">Edit</button></td></tr>`).join('')}</tbody></table>` : empty(noRows);
 }
 async function openPatient(id){
