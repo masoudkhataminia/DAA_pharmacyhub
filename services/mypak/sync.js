@@ -2,6 +2,27 @@ import { mergeMyPakPatients, normalizeMyPakMedicationBalance } from './mapper.js
 
 const initialStatus = () => ({ running: false, progress: 0, currentPage: 0, pagesCompleted: 0, recordsProcessed: 0, recordsAdded: 0, recordsUpdated: 0, recordsSkipped: 0, lastError: null, startedAt: null, finishedAt: null });
 
+async function collectPaged(fetchPage, { pageSize, maxPages, label, concurrency = 4 }) {
+  const first = await fetchPage(1); const rows = Array.isArray(first.data) ? [...first.data] : [];
+  const total = Number.isFinite(Number(first.total)) ? Number(first.total) : null;
+  if (total !== null) {
+    const pageCount = Math.ceil(total / pageSize);
+    if (pageCount > maxPages) throw new Error(`${label} pagination safety limit reached`);
+    for (let start = 2; start <= pageCount; start += concurrency) {
+      const pages = Array.from({ length: Math.min(concurrency, pageCount - start + 1) }, (_, index) => start + index);
+      const responses = await Promise.all(pages.map(fetchPage));
+      responses.forEach(response => rows.push(...(Array.isArray(response.data) ? response.data : [])));
+    }
+    return rows.slice(0, total);
+  }
+  for (let page = 2; page <= maxPages && rows.length; page++) {
+    const response = await fetchPage(page); const pageRows = Array.isArray(response.data) ? response.data : [];
+    rows.push(...pageRows); if (pageRows.length < pageSize) break;
+    if (page === maxPages) throw new Error(`${label} pagination safety limit reached`);
+  }
+  return rows;
+}
+
 export class MyPakSyncService {
   constructor({ client, readStore, writeStore, pageSize = 200, maxPages = 100 } = {}) { this.client = client; this.readStore = readStore; this.writeStore = writeStore; this.pageSize = pageSize; this.maxPages = maxPages; this.status = initialStatus(); }
   getStatus() { return { ...this.status }; }
@@ -20,29 +41,13 @@ export class MyPakSyncService {
         if (!pageRows.length || (total !== null && rows.length >= total)) break;
         if (pageIndex === this.maxPages) throw new Error('MyPak pagination safety limit reached');
       }
-      const balances = [];
-      for (let pageIndex = 1; pageIndex <= this.maxPages; pageIndex++) {
-        const response = await this.client.listVirtualPillBalances({ pageIndex, pageSize: this.pageSize, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] });
-        const pageRows = Array.isArray(response.data) ? response.data : [];
-        const balanceTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
-        balances.push(...pageRows);
-        if (!pageRows.length || (balanceTotal !== null && balances.length >= balanceTotal)) break;
-        if (pageIndex === this.maxPages) throw new Error('MyPak pill balance pagination safety limit reached');
-      }
+      const balances = await collectPaged(pageIndex => this.client.listVirtualPillBalances({ pageIndex, pageSize: this.pageSize, patientIds: [], patientGroupIds: [], isShowPacked: true, sortField: 'PatientLastName', sortOrder: 1, packingStatus: ['0'] }), { pageSize: this.pageSize, maxPages: this.maxPages, label: 'MyPak pill balance' });
       const insufficientResponse = await this.client.listInsufficientPillBalances({ patientGroupIds: [], patientIds: [], qScriptFilters: [], packCycle: 1, packStartDate: new Date().toDateString() });
       const insufficient = new Map((Array.isArray(insufficientResponse.data) ? insufficientResponse.data : []).map(row => [String(row.prescriptionId), Boolean(row.isInsufficientPillBalance)]));
       const doctorsResponse = await this.client.listDoctors();
       const doctors = Array.isArray(doctorsResponse.data) ? doctorsResponse.data : [];
-      const dispenseHistory = [];
       const today = new Date(); const from = new Date(today); from.setDate(from.getDate() - 90);
-      for (let pageIndex = 1; pageIndex <= 50; pageIndex++) {
-        const response = await this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 });
-        const pageRows = Array.isArray(response.data) ? response.data : [];
-        const dispenseTotal = Number.isFinite(Number(response.total)) ? Number(response.total) : null;
-        dispenseHistory.push(...pageRows);
-        if (!pageRows.length || (dispenseTotal !== null && dispenseHistory.length >= dispenseTotal)) break;
-        if (pageIndex === 50) throw new Error('MyPak dispense history pagination safety limit reached');
-      }
+      const dispenseHistory = await collectPaged(pageIndex => this.client.listDispenseTracking({ pageIndex, pageSize: this.pageSize, scriptType: 0, dateFrom: from.toISOString(), dateTo: today.toISOString(), dispenseScriptType: [], sortField: 'DateDispensed', sortOrder: -1 }), { pageSize: this.pageSize, maxPages: 50, label: 'MyPak dispense history' });
       const createdDateTo = new Date(); const createdDateFrom = new Date(createdDateTo); createdDateFrom.setDate(createdDateFrom.getDate() - 120);
       const packSummaryResponse = await this.client.packJobSummary({ pageIndex: 1, pageSize: 99999, createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString() });
       const packSummary = packSummaryResponse.data || {};
