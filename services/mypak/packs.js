@@ -6,6 +6,7 @@ export const PACK_STATUS_LABELS = Object.freeze({
 const text = value => String(value ?? '').trim();
 const value = (row, ...keys) => keys.map(key => row?.[key]).find(item => item !== undefined && item !== null && item !== '');
 const array = value => Array.isArray(value) ? value : [];
+const indexed = value => Array.isArray(value) ? value : (value && typeof value === 'object' ? Object.keys(value).sort((a,b) => Number(a) - Number(b)).map(key => value[key]) : []);
 const unwrap = response => response?.data?.data ?? response?.data ?? response ?? {};
 
 export function packJobId(row) {
@@ -73,9 +74,9 @@ export function prescriptionDirection(prescription = {}) {
 export function packMedicationCells(packDose, prescriptionId) {
   const allocation = packDose?.doseAllocated?.[prescriptionId] ?? packDose?.doseAllocated?.[String(prescriptionId)] ?? [];
   const rows = [];
-  array(allocation).forEach((week, weekIndex) => {
-    array(week).forEach((day, dayIndex) => {
-      array(day).forEach((quantity, doseIndex) => {
+  indexed(allocation).forEach((week, weekIndex) => {
+    indexed(week).forEach((day, dayIndex) => {
+      indexed(day).forEach((quantity, doseIndex) => {
         const qty = Number(quantity || 0);
         if (!qty) return;
         const page = Array.isArray(packDose.pageHeadings?.[0]) ? packDose.pageHeadings[0] : packDose.pageHeadings;

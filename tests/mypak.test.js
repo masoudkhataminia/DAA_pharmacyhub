@@ -129,7 +129,7 @@ test('pack jobs merge by job id instead of duplicating each sync', () => {
 });
 
 test('checking dose allocation becomes exact week day and compartment cells', () => {
-  const dose = normalizePackDose({ data:{ packStartDate:'2026-07-13', numberOfWeek:1, rowHeadings:['Monday'], pageHeadings:[['Breakfast','Lunch','Dinner','Bedtime']], prescriptions:[{id:'rx1',drug:{drugName:'Example 5mg'}}], doseAllocated:{rx1:[[[1,0,0.5,0]]]}} });
+  const dose = normalizePackDose({ data:{ packStartDate:'2026-07-13', numberOfWeek:1, rowHeadings:['Monday'], pageHeadings:[['Breakfast','Lunch','Dinner','Bedtime']], prescriptions:[{id:'rx1',drug:{drugName:'Example 5mg'}}], doseAllocated:{rx1:{0:[[1,0,0.5,0]]}}} });
   const cells = packMedicationCells(dose, 'rx1');
   assert.deepEqual(cells.map(cell=>[cell.day,cell.doseTime,cell.quantity]), [['Monday','Breakfast',1],['Monday','Dinner',0.5]]);
 });
