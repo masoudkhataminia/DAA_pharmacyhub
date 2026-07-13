@@ -409,10 +409,10 @@ function inferRequestFlag(repeatsLeft, owing, settings) {
 function isActionableScriptItem(item) {
   const status = cleanText(item?.status || item?.requestFlag || '');
   if (item?.owing || /^script owing$/i.test(status)) return true;
-  if (/^manual request$/i.test(status)) return true;
   const repeatText = cleanText(item?.repeatsLeft ?? '');
   const repeats = repeatText === '' ? null : Number(repeatText);
   if (Number.isFinite(repeats)) return repeats < 2;
+  if (/^manual request$/i.test(status)) return true;
   return /^(new script required|no script \/ negative balance)$/i.test(status);
 }
 

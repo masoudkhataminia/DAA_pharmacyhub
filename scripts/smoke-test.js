@@ -18,6 +18,7 @@ assert.equal(isActionableScriptItem({ status:'Manual review' }), false);
 assert.equal(isActionableScriptItem({ repeatsLeft:1, status:'Low repeats' }), true);
 assert.equal(isActionableScriptItem({ repeatsLeft:4, owing:true, status:'Script owing' }), true);
 assert.equal(isActionableScriptItem({ status:'Manual request' }), true);
+assert.equal(isActionableScriptItem({ repeatsLeft:2, status:'Manual request' }), false);
 const p = computePatient({fullName:'Test Patient', cycleDays:14, lastPickupDate:'01/06/2026', packLeadDays:3, dispenseLeadDays:1, orderLeadDays:7, packStatus:'Not started', dispenseStatus:'Not dispensed'}, {defaultCycleDays:14, defaultPackLeadDays:3, defaultDispenseLeadDays:1, defaultOrderLeadDays:7, urgentWindowDays:2, dueSoonWindowDays:7});
 assert.equal(p.nextPickupDisplay, '15/06/2026');
 
