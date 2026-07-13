@@ -88,6 +88,17 @@ test('MPS mapper adds a new resident with safe workflow defaults', () => {
   assert.equal(data.patients[0].packingStream, 'Sachet');
 });
 
+test('MPS residents never merge into MyPak WP patients', () => {
+  const wpPatient = { id: 'wp-only', mypakPatientId: '10', externalId: 'MRN-101', fullName: 'Jane Citizen', dob: '1980-04-03', packingStream: 'WP', active: true };
+  const data = store([wpPatient]);
+  const result = mergeMpsPatients(data, [patient()], [{ hsId: 7, facilityGroupId: 3, name: 'Wing A' }]);
+  assert.equal(result.recordsAdded, 1);
+  assert.equal(result.recordsUpdated, 0);
+  assert.equal(data.patients.length, 2);
+  assert.equal(wpPatient.mpsPatientId, undefined);
+  assert.equal(data.patients[1].packingStream, 'Sachet');
+});
+
 test('offline MPS CSV rows map common export headings', () => {
   const mapped = mapOfflineMpsPatient({ 'MPS ID': '5001', 'Given Name': 'Mary', 'Family Name': 'Example', DOB: '1940-02-01', Ward: 'Sachet Wing', Room: '8B', MRN: 'MRN-5001', Status: 'Active' });
   assert.equal(mapped.hsId, '5001');
