@@ -10,6 +10,11 @@ import { MyPakClient } from './services/mypak/client.js';
 import { MyPakSyncService } from './services/mypak/sync.js';
 import { publicMyPakError } from './services/mypak/errors.js';
 import { normalizeMyPakMedicationBalance } from './services/mypak/mapper.js';
+import { MpsClient } from './services/mps/client.js';
+import { MpsSyncService } from './services/mps/sync.js';
+import { publicMpsError } from './services/mps/errors.js';
+import { mergeMpsPatients } from './services/mps/mapper.js';
+import { mapOfflineMpsPatients } from './services/mps/offline.js';
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
@@ -52,6 +57,13 @@ const DEFAULT_STORE = {
   mypakPrescriptions: [],
   mypakDoctors: [],
   mypakDispenseHistory: [],
+  mpsFacilityGroups: [],
+  mpsFacilities: [],
+  mpsDrugs: [],
+  mpsDrugForms: [],
+  mpsOrders: [],
+  mpsPackedDays: [],
+  mpsPackedPrn: [],
   dispenseWorkflow: {},
   prescriptionWorkflow: {},
   prescriptionAutomation: {
@@ -63,7 +75,8 @@ const DEFAULT_STORE = {
     subjectTemplate: 'Prescription request – {{patientName}}',
     bodyTemplate: 'Dear Dr,\n\nPlease review and provide prescriptions for the selected medicines for {{patientName}}.\n\nKind regards,\nHibiscus Pharmacy'
   },
-  mypakSync: { lastSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, status: 'never' }
+  mypakSync: { lastSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, status: 'never' },
+  mpsSync: { lastPatientSyncAt: null, lastMedicationSyncAt: null, lastSuccessAt: null, lastError: null, totalPatients: 0, totalDrugs: 0, totalOrders: 0, totalPackedDays: 0, totalPackedPrn: 0, status: 'never' }
 };
 
 function id() { return crypto.randomUUID(); }
@@ -139,9 +152,16 @@ function audit(store, action, details = {}) {
 
 const mypakClient = new MyPakClient();
 const mypakSyncService = new MyPakSyncService({ client: mypakClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
+const mpsClient = new MpsClient();
+const mpsSyncService = new MpsSyncService({ client: mpsClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
 
 function sendMyPakError(res, error) {
   const safe = publicMyPakError(error);
+  res.status(safe.status).json({ error: safe.error });
+}
+
+function sendMpsError(res, error) {
+  const safe = publicMpsError(error);
   res.status(safe.status).json({ error: safe.error });
 }
 
@@ -802,7 +822,18 @@ function specialOrderLetterHtml(r) {
 }
 
 function buildState(store) {
-  return { ...store, patientsComputed: activeComputed(store).sort((a,b)=>(a.daysToPickup ?? 9999)-(b.daysToPickup ?? 9999)||a.fullName.localeCompare(b.fullName)), dispenseQueue: dispenseQueue(store), specialOrdersComputed: specialOrdersComputed(store), dashboard: dashboard(store) };
+  const {
+    mpsFacilityGroups: _privateMpsGroups,
+    mpsFacilities: _privateMpsFacilities,
+    mpsDrugs: _privateMpsDrugs,
+    mpsDrugForms: _privateMpsDrugForms,
+    mpsOrders: _privateMpsOrders,
+    mpsPackedDays: _privateMpsPackedDays,
+    mpsPackedPrn: _privateMpsPackedPrn,
+    ...publicStore
+  } = store;
+  const sortPatients = rows => rows.sort((a,b)=>(a.daysToPickup ?? 9999)-(b.daysToPickup ?? 9999)||a.fullName.localeCompare(b.fullName));
+  return { ...publicStore, patientsComputed: sortPatients(activeComputed(store)), allPatientsComputed: sortPatients(store.patients.map(p => computePatient(p, store.settings))), dispenseQueue: dispenseQueue(store), specialOrdersComputed: specialOrdersComputed(store), dashboard: dashboard(store) };
 }
 function importPatients(buffer, filename) {
   const store = readStore(); const rows = workbookRows(buffer);
@@ -867,6 +898,73 @@ app.get('/api/mypak/report-options', async (_, res) => { try { res.json(await my
 app.post('/api/mypak/sync/patients', async (_, res) => { try { const result = await mypakSyncService.syncPatients(); res.status(result.started ? 200 : 202).json(result); } catch (error) { sendMyPakError(res, error); } });
 app.post('/api/mypak/sync/all', async (_, res) => { try { const result = await mypakSyncService.syncAll(); res.status(result.started ? 200 : 202).json(result); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/sync/status', (_, res) => res.json(mypakSyncService.getStatus()));
+app.get('/api/mps/status', (_, res) => {
+  const sync = readStore().mpsSync || {};
+  res.json({
+    configured: mpsClient.isConfigured(),
+    authenticated: Boolean(mpsClient.lastSuccessfulRequestAt || sync.lastSuccessAt),
+    online: Boolean(mpsClient.isConfigured() && mpsClient.lastSuccessfulRequestAt),
+    baseUrl: mpsClient.baseUrl,
+    lastSuccessfulRequestAt: mpsClient.lastSuccessfulRequestAt || sync.lastSuccessAt || null,
+    lastPatientSyncAt: sync.lastPatientSyncAt || null,
+    lastMedicationSyncAt: sync.lastMedicationSyncAt || null,
+    lastOfflineImportAt: sync.lastOfflineImportAt || null,
+    lastError: sync.lastError || null,
+    patientCount: sync.totalPatients || 0,
+    drugCount: sync.totalDrugs || 0,
+    orderCount: sync.totalOrders || 0,
+    packedDayCount: sync.totalPackedDays || 0,
+    packedPrnCount: sync.totalPackedPrn || 0
+  });
+});
+app.post('/api/mps/session', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token) return res.status(400).json({ error: 'MPS bearer token is required' });
+    if (token.length > 20000) return res.status(400).json({ error: 'MPS bearer token is too long' });
+    mpsClient.configureToken(token);
+    if (req.body) req.body.token = '';
+    await mpsClient.currentUser();
+    res.json({ ok: true, authenticated: true });
+  } catch (error) {
+    if (req.body) req.body.token = '';
+    mpsClient.clearToken();
+    sendMpsError(res, error);
+  }
+});
+app.post('/api/mps/test', async (_, res) => { try { const user = await mpsClient.currentUser(); res.json({ ok: true, authenticated: true, userConfigured: Boolean(user) }); } catch (error) { sendMpsError(res, error); } });
+app.get('/api/mps/patients', async (req, res) => {
+  try {
+    const facilityGroupId = Number(req.query.facilityGroupId);
+    const changeNumber = Math.max(0, Number(req.query.changeNumber) || 0);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+    if (!Number.isInteger(facilityGroupId) || facilityGroupId <= 0) return res.status(400).json({ error: 'Valid facilityGroupId is required' });
+    res.json(await mpsClient.listPatients({ facilityGroupId, changeNumber, pageSize }));
+  } catch (error) { sendMpsError(res, error); }
+});
+app.get('/api/mps/patients/:facilityGroupId/:patientId/mhr', async (req, res) => { try { res.json(await mpsClient.patientMhr(req.params.facilityGroupId, req.params.patientId)); } catch (error) { sendMpsError(res, error); } });
+app.get('/api/mps/patients/:patientId/medication-chart', async (req, res) => { try { res.json(await mpsClient.medicationChart(req.params.patientId)); } catch (error) { sendMpsError(res, error); } });
+app.post('/api/mps/sync/patients', async (_, res) => { try { const result = await mpsSyncService.syncPatients(); res.status(result.started ? 200 : 409).json(result); } catch (error) { sendMpsError(res, error); } });
+app.post('/api/mps/sync/medications', async (req, res) => { try { const result = await mpsSyncService.syncMedicationData({ days: req.body?.days }); res.status(result.started ? 200 : 409).json(result); } catch (error) { sendMpsError(res, error); } });
+app.get('/api/mps/sync/status', (_, res) => res.json(mpsSyncService.getStatus()));
+app.post('/api/mps/import/patients', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No MPS patient export uploaded' });
+    const extension = path.extname(req.file.originalname || '').toLowerCase();
+    if (!['.csv', '.xlsx', '.xls'].includes(extension)) return res.status(400).json({ error: 'MPS offline import accepts CSV, XLSX, or XLS files' });
+    const sourceRows = workbookRows(req.file.buffer).map(item => item.row);
+    const patients = mapOfflineMpsPatients(sourceRows);
+    if (!patients.length) return res.status(400).json({ error: 'No MPS patients found. The file needs an MPS ID / Patient ID and a resident name.' });
+    const store = readStore();
+    const at = nowISO();
+    const stats = mergeMpsPatients(store, patients, store.mpsFacilities || [], at);
+    const totalPatients = store.patients.filter(patient => patient.mpsPatientId).length;
+    store.mpsSync = { ...(store.mpsSync || {}), lastOfflineImportAt: at, lastError: null, totalPatients, status: 'offline-import' };
+    audit(store, 'Imported offline MPS patient export', { filename: path.basename(req.file.originalname || 'mps-patients'), sourceRows: sourceRows.length, importedRows: patients.length, added: stats.recordsAdded, updated: stats.recordsUpdated, skipped: stats.recordsSkipped });
+    writeStore(store);
+    res.json({ sourceRows: sourceRows.length, importedRows: patients.length, totalPatients, ...stats });
+  } catch (error) { res.status(400).json({ error: error.message || 'MPS offline patient import failed' }); }
+});
 app.patch('/api/dispense-workflow/:key', (req, res) => { const allowed = ['needs_dispense','dispensed','confirmed']; const status = cleanText(req.body.status); if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid dispense status' }); const store = readStore(); store.dispenseWorkflow[req.params.key] = { status, updatedAt: nowISO() }; audit(store, 'Updated dispense workflow', { key: req.params.key, status }); writeStore(store); res.json(store.dispenseWorkflow[req.params.key]); });
 app.get('/api/export/store', (_, res) => res.download(DATA_FILE, `webster-pack-backup-${toISODate(todayDate())}.json`));
 app.post('/api/reset', (req, res) => { const store = clone(DEFAULT_STORE); audit(store, 'Reset store', { reason: req.body?.reason || 'manual reset' }); writeStore(store); res.json({ ok: true }); });
@@ -893,6 +991,7 @@ app.get('/api/patients/:id/details', (req, res) => {
   const prescriptions = (store.mypakPrescriptions || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(normalizeMyPakMedicationBalance);
   const linkedBalances = linkScriptsToMedicationBalances(medicationBalances, scripts);
   const linkedPrescriptions = linkScriptsToMedicationBalances(prescriptions, scripts);
+  const belongsToMpsPatient = row => String(row?.patientId ?? row?.patient?.hsId ?? '') === String(p.mpsPatientId || '');
   res.json({
     patient: computePatient(p, store.settings),
     medications: store.medications.filter(m => m.patientNameKey === key),
@@ -900,6 +999,9 @@ app.get('/api/patients/:id/details', (req, res) => {
     prescriptions: linkedPrescriptions.balances.map(m => ({ ...m, requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })),
     dispenseHistory: (store.mypakDispenseHistory || []).filter(m => String(m.patientId) === String(p.mypakPatientId)),
     doctors: store.mypakDoctors || [],
+    mpsPackedDays: (store.mpsPackedDays || []).filter(belongsToMpsPatient).slice(0, 31),
+    mpsPackedPrn: (store.mpsPackedPrn || []).filter(belongsToMpsPatient).slice(0, 50),
+    mpsOrders: (store.mpsOrders || []).filter(belongsToMpsPatient).slice(0, 250),
     scripts: linkedBalances.scripts,
     doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id),
     scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id)

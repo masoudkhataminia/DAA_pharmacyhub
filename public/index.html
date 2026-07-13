@@ -4,13 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260713-workflow" />
+  <link rel="stylesheet" href="/styles.css?v=20260714-mps-sachet" />
 </head>
 <body>
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark">W</div>
-      <div><strong>DAA Pharmacy Hub</strong><span>MyPak-connected workflow</span></div>
+      <div><strong>DAA Pharmacy Hub</strong><span>MyPak + MPS connected workflow</span></div>
     </div>
     <button class="nav active" data-view="dashboard">Dashboard</button>
     <button class="nav" data-view="patients">Patients</button>
@@ -18,7 +18,7 @@
     <button class="nav" data-view="special">Special Orders / S8</button>
     <button class="nav" data-view="doctor">Doctor Updates</button>
     <button class="nav" data-view="settings">Settings & Audit</button>
-    <div class="side-note">Live MyPak data · safe pharmacy workflow</div>
+    <div class="side-note">Live MyPak / MPS data · safe pharmacy workflow</div>
   </aside>
 
   <main class="main">
@@ -62,12 +62,27 @@
         <div class="panel-head"><h2>MyPak sync</h2><span id="mypakConnection">Checking configuration…</span></div>
         <div class="toolbar"><button id="mypakSyncBtn" type="button">Sync patients</button><span id="mypakSyncSummary">No sync information available.</span></div>
       </section>
+      <section class="panel" id="mpsPanel">
+        <div class="panel-head"><h2>MPS MediSphere sync</h2><span id="mpsConnection">Checking configuration…</span></div>
+        <form id="mpsTokenForm" class="mps-token-row">
+          <input id="mpsToken" name="token" type="password" autocomplete="off" placeholder="MPS MediSphere bearer / ID token" required />
+          <button type="submit">Connect for this server session</button>
+        </form>
+        <p class="secret-note">The authorised MediSphere token is held only in backend memory. It is never saved in store.json, returned to the browser, or written to logs.</p>
+        <div class="toolbar"><button id="mpsPatientSyncBtn" type="button">Sync MPS patients</button><button id="mpsMedicationSyncBtn" type="button">Sync MPS medication data (7 days)</button><span id="mpsSyncSummary">No MPS sync information available.</span></div>
+        <form id="mpsOfflineImportForm" class="offline-import-row">
+          <div><b>Offline fallback</b><p class="secret-note">Upload an MPS patient export when the live account/token is unavailable. Imported residents appear as Sachet in Patient Search.</p></div>
+          <input name="file" type="file" accept=".csv,.xlsx,.xls" required />
+          <button type="submit">Import MPS patients</button>
+        </form>
+      </section>
       <section class="panel"><div class="panel-head"><h2>Import review</h2><span>new / updated / missing HIND patients</span></div><div id="importReview" class="table-wrap"></div></section>
     </section>
 
     <section id="patients" class="view">
-      <div class="toolbar"><input id="patientSearch" placeholder="Search patient..." /><select id="patientFilter"><option value="all">All active</option><option value="due">Due this week</option><option value="s8">S8 priority</option><option value="supplied">Patient supplied meds</option><option value="script">Script issue</option></select></div>
-      <section class="panel"><div class="panel-head"><h2>Patient master</h2><span>editable cycle, pickup, status and flags</span></div><div id="patientTable" class="table-wrap"></div></section>
+      <div id="mpsPatientSourceStatus" class="source-status offline">MPS Offline · showing locally saved patients</div>
+      <div class="toolbar"><input id="patientSearch" placeholder="Search name, MPS ID, room or facility..." /><select id="patientFilter"><option value="all">All active</option><option value="sachet">Sachet (MPS)</option><option value="wp">WP (Webster Pack)</option><option value="inactive">Inactive / cached</option><option value="due">Due this week</option><option value="s8">S8 priority</option><option value="supplied">Patient supplied meds</option><option value="script">Script issue</option></select></div>
+      <section class="panel"><div class="panel-head"><h2>Patient master</h2><span id="patientResultSummary">Search active and cached residents</span></div><div id="patientTable" class="table-wrap"></div></section>
       <section class="panel details hidden" id="patientDetails"></section>
     </section>
 
@@ -132,6 +147,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260714-live-refresh"></script>
+  <script src="/app.js?v=20260714-mps-sachet-live-refresh"></script>
 </body>
 </html>
