@@ -1,4 +1,4 @@
-import { mergeMyPakPatients } from './mapper.js';
+import { mergeMyPakPatients, normalizeMyPakMedicationBalance } from './mapper.js';
 
 const initialStatus = () => ({ running: false, progress: 0, currentPage: 0, pagesCompleted: 0, recordsProcessed: 0, recordsAdded: 0, recordsUpdated: 0, recordsSkipped: 0, lastError: null, startedAt: null, finishedAt: null });
 
@@ -44,7 +44,10 @@ export class MyPakSyncService {
         if (pageIndex === 50) throw new Error('MyPak dispense history pagination safety limit reached');
       }
       const store = this.readStore(); const at = new Date().toISOString(); const stats = mergeMyPakPatients(store, rows, at);
-      store.mypakMedicationBalances = [...new Map(balances.map(row => [String(row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`), row])).values()];
+      store.mypakMedicationBalances = [...new Map(balances.map(rawRow => {
+        const row = normalizeMyPakMedicationBalance(rawRow);
+        return [String(row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`), row];
+      })).values()];
       store.mypakPrescriptions = store.mypakMedicationBalances.map(row => ({ ...row, prescriptionId: row.prescriptionId || row.vpBalanceId || `${row.patientId}:${row.drugCode || row.medication}`, lastDispenseDate: row.lastDispenseDate || row.lastDispenseBalanceUpdated || '', isInsufficientPillBalance: insufficient.get(String(row.prescriptionId || row.vpBalanceId)) || Number(row.balanceQty) < 0 }));
       store.mypakDoctors = [...new Map(doctors.map(row => [String(row.doctorId), row])).values()];
       store.mypakDispenseHistory = [...new Map(dispenseHistory.map(row => [String(row.scriptTrackingId), row])).values()];

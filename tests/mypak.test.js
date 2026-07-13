@@ -2,13 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { MyPakClient } from '../services/mypak/client.js';
-import { mergeMyPakPatients } from '../services/mypak/mapper.js';
+import { mergeMyPakPatients, normalizeMyPakMedicationBalance } from '../services/mypak/mapper.js';
 import { MyPakSyncService } from '../services/mypak/sync.js';
 
 const response = (status, body) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) });
 const settings = { defaultCycleDays: 14, weeklyDays: 7, fortnightlyDays: 14, monthlyDays: 28, defaultPackLeadDays: 3, defaultDispenseLeadDays: 1, defaultOrderLeadDays: 7 };
 const store = patients => ({ settings, patients, importReviews: [] });
 const row = overrides => ({ patientId: 10, externalPatientId: 'EXT-10', firstName: 'Jane', lastName: 'Citizen', dob: '1980-04-03', patientGroupName: 'Fortnightly', ...overrides });
+
+test('blank MyPak repeat positions do not request a new script', () => {
+  assert.deepEqual(normalizeMyPakMedicationBalance({ repeatsLeft: '', newScriptNeeded: true }), { repeatsLeft: '', hasRepeatPosition: false, newScriptNeeded: null });
+  assert.equal(normalizeMyPakMedicationBalance({ repeatsLeft: 0 }).newScriptNeeded, true);
+  assert.equal(normalizeMyPakMedicationBalance({ repeatsLeft: 2 }).newScriptNeeded, false);
+});
 
 test('missing token is rejected without making a request', async () => {
   let called = false; const client = new MyPakClient({ env: {}, fetchImpl: async () => { called = true; } });

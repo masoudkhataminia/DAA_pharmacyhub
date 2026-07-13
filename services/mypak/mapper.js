@@ -5,6 +5,17 @@ export const normalName = value => text(value).toLowerCase().normalize('NFKD').r
 const isoDate = value => { const d = value ? new Date(value) : null; return d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : ''; };
 const fullName = row => text(row.fullName || row.fullnameRev || `${row.firstName || ''} ${row.lastName || ''}`);
 
+export function normalizeMyPakMedicationBalance(row) {
+  const repeatText = text(row?.repeatsLeft);
+  const repeatPosition = repeatText === '' ? null : Number(repeatText);
+  const hasRepeatPosition = Number.isFinite(repeatPosition);
+  return {
+    ...row,
+    hasRepeatPosition,
+    newScriptNeeded: hasRepeatPosition ? repeatPosition <= 0 : null
+  };
+}
+
 function cycleDays(group, settings) {
   const value = text(group).toLowerCase();
   if (/fortnight|2\s*week|14\s*day/.test(value)) return settings.fortnightlyDays || 14;
