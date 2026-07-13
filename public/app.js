@@ -3,7 +3,7 @@ let selectedPatientId = null;
 let editPatientId = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
-const CLIENT_BUILD_VERSION = '20260714-pack-amendment-v1';
+const CLIENT_BUILD_VERSION = '20260714-premium-script-pdf-v2';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -342,7 +342,7 @@ async function buildRequestForPatient(id){
     const owing=/owing/i.test(`${x.scriptStatus||''} ${x.dispenseStatus||''}`) || (!x.scriptNumber && Number(x.quantity||x.manuallyQuantity)>0);
     byMed.set(key,{...existing,scriptNumber:x.scriptNumber||x.calculatedScriptNumber||existing.scriptNumber||'',lastDispenseDate:x.dateDispensed||'',lastDispenseQty:x.quantity??x.manuallyQuantity??'',dispenseStatus:x.dispenseStatus??'',owing, status:owing?'Script owing':existing.status,source:`${existing.source||'MyPak'} + dispense`});
   }
-  const items = Array.from(byMed.values()).sort((a,b)=>a.medicineName.localeCompare(b.medicineName)).map(it=>({...it,selected:shouldAutoSelectScript(it)}));
+  const items = Array.from(byMed.values()).sort((a,b)=>a.medicineName.localeCompare(b.medicineName)).map(it=>{const selected=shouldAutoSelectScript(it);return {...it,selected,autoSelected:selected,manualOverride:false,owingCount:it.owing?1:''};});
   const actionableCount = items.filter(it => it.selected).length;
   const owingCount = items.filter(it => it.selected && (it.owing || /^Script owing$/i.test(it.status||''))).length;
   const lowRepeatCount = items.filter(it => it.selected && repeatPosition(it.repeatsLeft) !== null && repeatPosition(it.repeatsLeft) < 2).length;
@@ -365,11 +365,11 @@ function renderRequestItems(){
   const showOk = !!$('#showOkItems')?.checked;
   const option = (cur, val) => `<option value="${esc(val)}" ${cur===val?'selected':''}>${esc(val)}</option>`;
   const visible = items.map((it,i)=>({...it,_i:i})).filter(it => showOk || it.selected);
-  $('#requestItems').innerHTML = visible.length ? visible.map(it=>{const repeats=repeatPosition(it.repeatsLeft);return `<div class="request-item professional ${it.selected?'':'ok-item'}"><input type="checkbox" data-i="${it._i}" ${it.selected?'checked':''} onchange="requestItemToggled(this)"><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small><small>Last dispense: <b>${esc(it.lastDispenseDate||'—')}</b> · Qty: <b>${esc(patientValue(it.lastDispenseQty))}</b> · Script: <b>${esc(it.scriptNumber||'—')}</b></small>${it.source?`<em>${esc(it.source)}</em>`:''}${it.owing||/^Script owing$/i.test(it.status||'')?badge('OWING — script required','danger'):''}${repeats!==null&&repeats<2?badge(`${repeats} repeat${repeats===1?'':'s'} left`,'warn'):''}${it.status==='Requested'?badge('Already requested','ok'):''}</div><label><span>Repeats left</span><input class="repeat-input" data-i="${it._i}" value="${esc(it.repeatsLeft ?? '')}" placeholder="0, 1, 2..." onchange="requestRepeatChanged(this)"></label><label><span>Status</span><select data-i="${it._i}" onchange="requestStatusChanged(this)">${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`}).join('') : empty('No script has fewer than 2 repeats and no owing script was found. Use “Show all medicines” to add one manually.');
+  $('#requestItems').innerHTML = visible.length ? visible.map(it=>{const repeats=repeatPosition(it.repeatsLeft);const isOwing=it.owing||/^Script owing$/i.test(it.status||'');const quantity=isOwing?(it.owingCount||1):(it.repeatsLeft??'');const quantityLabel=isOwing?'Scripts owing':'Repeats left';const quantityBadge=isOwing?`${quantity} script${Number(quantity)===1?'':'s'} owing`:(repeats!==null?`${repeats} repeat${repeats===1?'':'s'} left`:'');return `<div class="request-item professional ${it.selected?'':'ok-item'}"><input type="checkbox" data-i="${it._i}" ${it.selected?'checked':''} onchange="requestItemToggled(this)"><div class="med-cell"><b>${esc(it.medicineName)}</b><small>${esc(it.directions || 'No directions')} · ${esc(it.timing || it.source || '')}</small><small>Last dispense: <b>${esc(it.lastDispenseDate||'—')}</b> · Qty: <b>${esc(patientValue(it.lastDispenseQty))}</b> · Script: <b>${esc(it.scriptNumber||'—')}</b></small>${it.source?`<em>${esc(it.source)}</em>`:''}${quantityBadge?badge(quantityBadge,isOwing?'danger':(repeats!==null&&repeats<2?'warn':'blue')):''}${it.status==='Requested'?badge('Already requested','ok'):''}</div><label><span>${quantityLabel}</span><input class="repeat-input" data-i="${it._i}" type="number" min="0" step="1" value="${esc(quantity)}" placeholder="0, 1, 2..." onchange="requestRepeatChanged(this)"></label><label><span>Request type</span><select data-i="${it._i}" onchange="requestStatusChanged(this)">${option(it.status,'No script / negative balance')}${option(it.status,'Negative balance')}${option(it.status,'New script required')}${option(it.status,'Script owing')}${option(it.status,'Low repeats')}${option(it.status,'Manual request')}${option(it.status,'OK')}</select></label></div>`}).join('') : empty('No script has fewer than 2 repeats and no owing script was found. Use “Show all medicines” to add one manually.');
 }
 function tickAllRequestItems(on){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
-  items.forEach(it=>{it.selected=on?shouldAutoSelectScript(it):false;});
+  items.forEach(it=>{it.selected=on?shouldAutoSelectScript(it):false;it.autoSelected=it.selected;it.manualOverride=false;});
   $('#requestBuilder').dataset.items=JSON.stringify(items);
   renderRequestItems();
 }
@@ -377,7 +377,8 @@ function requestItemToggled(input){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
   const item = items[Number(input.dataset.i)]; if(!item) return;
   item.selected=!!input.checked;
-  if(item.selected && /^(OK|Requested)$/i.test(item.status||'')) item.status='Manual request';
+  item.manualOverride=true;
+  if(item.selected && /^(OK|Requested|Manual review)$/i.test(item.status||'')) item.status='Manual request';
   $('#requestBuilder').dataset.items=JSON.stringify(items);
   renderRequestItems();
 }
@@ -386,23 +387,28 @@ function requestStatusChanged(select){
   const item = items[Number(select.dataset.i)]; if(!item) return;
   item.status=select.value;
   item.owing=/^Script owing$/i.test(select.value);
+  if(item.owing && !Number(item.owingCount)) item.owingCount=1;
   item.selected=!/^(OK|Requested)$/i.test(select.value);
+  item.manualOverride=true;
   $('#requestBuilder').dataset.items=JSON.stringify(items);
   renderRequestItems();
 }
 function requestRepeatChanged(input){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
   const item = items[Number(input.dataset.i)]; if(!item) return;
-  item.repeatsLeft=input.value.trim();
+  const value=input.value.trim();
+  if(item.owing||/^Script owing$/i.test(item.status||'')) item.owingCount=value;
+  else item.repeatsLeft=value;
   const repeats=repeatPosition(item.repeatsLeft);
-  if(!item.owing && repeats!==null){item.status=repeats<=0?'New script required':repeats<2?'Low repeats':'OK';}
-  item.selected=shouldAutoSelectScript(item);
+  if(!item.owing && !/^(Low repeats|New script required|Manual request)$/i.test(item.status||'') && repeats!==null){item.status=repeats<=0?'New script required':repeats<2?'Low repeats':'OK';}
+  item.manualOverride=true;
+  item.selected=!/^(OK|Requested)$/i.test(item.status||'');
   $('#requestBuilder').dataset.items=JSON.stringify(items);
   renderRequestItems();
 }
 async function createScriptRequest(){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
-  const selected=items.filter(item=>item.selected).map(item=>({ prescriptionId:item.prescriptionId, medicineName:item.medicineName, directions:item.directions||'', repeatsLeft:item.repeatsLeft??'', status:/^OK$/i.test(item.status||'')?'Manual request':item.status, scriptNumber:item.scriptNumber||'', lastDispenseDate:item.lastDispenseDate||'', lastDispenseQty:item.lastDispenseQty??'', owing:!!item.owing }));
+  const selected=items.filter(item=>item.selected).map(item=>({ prescriptionId:item.prescriptionId, medicineName:item.medicineName, directions:item.directions||'', repeatsLeft:item.repeatsLeft??'', owingCount:item.owingCount??'', status:/^OK$/i.test(item.status||'')?'Manual request':item.status, scriptNumber:item.scriptNumber||'', lastDispenseDate:item.lastDispenseDate||'', lastDispenseQty:item.lastDispenseQty??'', owing:!!item.owing }));
   if(!selected.length) return toast('No actionable medicine selected. OK / sufficient-repeat medicines are not added to the GP letter.');
   const doctor=$('#requestDoctor'); const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
   toast('Last Repeat / Owing PDF created.'); window.open(`/api/letter/${r.id}/pdf`,'_blank'); await loadState(); showView('scripts');

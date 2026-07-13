@@ -22,7 +22,7 @@ import { mapOfflineMpsPatients } from './services/mps/offline.js';
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-pack-amendment-v1';
+const APP_BUILD_VERSION = '20260714-premium-script-pdf-v2';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -424,12 +424,13 @@ function inferRequestFlag(repeatsLeft, owing, settings) {
 }
 function isActionableScriptItem(item) {
   const status = cleanText(item?.status || item?.requestFlag || '');
+  if (/^(ok|requested|manual review|negative balance)$/i.test(status)) return false;
   if (item?.owing || /^script owing$/i.test(status)) return true;
+  if (/^(low repeats|new script required|no script \/ negative balance|manual request)$/i.test(status)) return true;
   const repeatText = cleanText(item?.repeatsLeft ?? '');
   const repeats = repeatText === '' ? null : Number(repeatText);
   if (Number.isFinite(repeats)) return repeats < 2;
-  if (/^manual request$/i.test(status)) return true;
-  return /^(new script required|no script \/ negative balance)$/i.test(status);
+  return false;
 }
 
 const MEDICATION_MATCH_STOP_WORDS = new Set([
@@ -1244,34 +1245,95 @@ app.post('/api/doctor-updates', (req, res) => { const store = readStore(); const
 app.patch('/api/doctor-updates/:id', (req, res) => { const store = readStore(); const u = store.doctorUpdates.find(x => x.id === req.params.id); if (!u) return res.status(404).json({ error: 'Doctor update not found' }); Object.assign(u, req.body, { updatedAt: nowISO() }); audit(store, 'Updated doctor update', { patient: u.patientFullName, status: u.status }); writeStore(store); res.json(u); });
 function lastRepeatOwingDetail(item = {}) {
   const reason = cleanText(item.status || item.requestFlag || 'New prescription required');
-  if (item.owing || /owing/i.test(reason)) return 'OWING';
+  if (item.owing || /owing/i.test(reason)) {
+    const countText = cleanText(item.owingCount ?? '');
+    const legacyCountText = cleanText(item.repeatsLeft ?? '');
+    const count = Number(countText !== '' ? countText : legacyCountText);
+    return Number.isFinite(count) && count > 0 ? `${count} script${count === 1 ? '' : 's'} owing` : 'Script owing';
+  }
+  if (/^(new script required|no script \/ negative balance|manual request)$/i.test(reason)) return 'New script needed';
   const repeatsText = cleanText(item.repeatsLeft ?? '');
   const repeats = repeatsText === '' ? null : Number(repeatsText);
-  if (Number.isFinite(repeats)) return repeats <= 0 ? 'Last repeat' : `${repeats} repeat${repeats === 1 ? '' : 's'} left`;
+  if (Number.isFinite(repeats)) return `${repeats} repeat${repeats === 1 ? '' : 's'} left`;
   return reason;
 }
 function scriptLetterHtml(r) {
-  const rowHtml = items => items.map(i => {
-    const detail = lastRepeatOwingDetail(i);
-    return `<tr><td>${htmlEsc(i.medicineName || i.drugDescription)}</td><td>${htmlEsc(detail)}</td></tr>`;
-  }).concat(Array.from({ length: Math.max(0, 8 - items.length) }, () => '<tr><td>&nbsp;</td><td>&nbsp;</td></tr>')).join('');
+  const rowHtml = items => items.map(i => `<tr><td>${htmlEsc(i.medicineName || i.drugDescription)}</td><td>${htmlEsc(lastRepeatOwingDetail(i))}</td></tr>`).join('');
   const items = (r.items || []).filter(isActionableScriptItem);
-  const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 8)) }, (_, index) => items.slice(index * 8, index * 8 + 8));
-  const copy = chunk => `<section class="copy">
-    <div class="important">IMPORTANT</div>
-    <div class="pharmacy">Hibiscus Day and Night Pharmacy<br><br>Hibiscus Shopping Centre,<br><br>4/8 Leanyer Dr,<br><br>Leanyer NT 0812<br><br>(08) 8945 5955</div>
-    <div class="title">New Prescription Required</div>
+  const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 7)) }, (_, index) => items.slice(index * 7, index * 7 + 7));
+  const pages = chunks.map((chunk, index) => `<section class="sheet">
+    <header><div><div class="brand">HIBISCUS PHARMACY</div><div class="pharmacy">Hibiscus Day and Night Pharmacy · Hibiscus Shopping Centre<br>4/8 Leanyer Dr, Leanyer NT 0812 · (08) 8945 5955</div></div><div class="important">IMPORTANT</div></header>
+    <div class="title"><span>Prescription request</span><h1>New Prescription Required</h1><p>Medication continuity request for clinical review</p></div>
+    <div class="patient"><div><small>PATIENT</small><b>${htmlEsc(r.patientFullName)}</b></div><div><small>DATE</small><b>${htmlEsc(dateDisplay(r.createdAt || toISODate(todayDate())))}</b></div></div>
     <div class="body"><p>Dear Dr,</p>
-    <p>Our client, <span class="patient-name">${htmlEsc(r.patientFullName)}</span> is picking up monthly medication from us. The following is the prescription that are due in the next two months:</p>
-    <table class="script-table"><tbody>${rowHtml(chunk)}</tbody></table>
+    <p>Our client receives monthly medication from our pharmacy. Please review the medicines below and provide new prescriptions where clinically appropriate.</p>
+    <table class="script-table"><thead><tr><th>MEDICATION</th><th>REQUEST</th></tr></thead><tbody>${rowHtml(chunk)}</tbody></table>
     ${r.note ? `<p class="note"><b>Note:</b> ${htmlEsc(r.note)}</p>` : ''}
-    <p>Kindly review and provide the prescription if it is appropriate. Thanks a lot.</p>
-    <p class="footer">Kind Regards,<br>Hibiscus Pharmacy</p></div>
-  </section>`;
-  const pages = chunks.map(chunk => `<div class="sheet">${copy(chunk)}${copy(chunk)}</div>`).join('');
+    <p>Thank you for reviewing this request.</p><p class="footer">Kind regards,<br><b>Hibiscus Pharmacy</b></p></div>
+    <div class="page-no">Page ${index + 1} of ${chunks.length}</div>
+  </section>`).join('');
   return `<!doctype html><html><head><title>New Prescription Required - ${htmlEsc(r.patientFullName)}</title><style>
-    @page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;font-size:8.5pt;line-height:1.15;background:#f3f4f6}.sheet{width:277mm;min-height:190mm;margin:0 auto 8mm;background:#fff;display:grid;grid-template-columns:1fr 1fr;gap:12mm;padding:7mm 5mm;break-after:page}.copy{min-width:0}.important{color:#f00;font-size:26pt;font-weight:700;line-height:1;margin-bottom:7mm}.pharmacy{font-size:7pt;line-height:1.05;margin-bottom:8mm}.title{font-size:12pt;font-weight:700;margin:0 0 9mm}.body p{margin:0 0 4mm}.patient-name{display:inline-block;min-width:45mm;border-bottom:1px solid #111;font-weight:700;text-align:center}.script-table{width:100%;border-collapse:collapse;table-layout:fixed;margin:6mm 0}.script-table td{border:1px solid #111;height:9mm;padding:1.5mm 2mm;vertical-align:middle;font-size:7.5pt;line-height:1.1;overflow-wrap:anywhere}.script-table td:first-child{width:56%}.note{font-size:7pt}.footer{margin-top:7mm}.printbar{position:sticky;top:0;z-index:2;background:#fff;border:1px solid #cbd5e1;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center}.printbar button{padding:9px 14px;border:0;border-radius:8px;background:#0f172a;color:white;cursor:pointer}@media print{body{background:#fff}.printbar{display:none}.sheet{margin:0;padding:0;min-height:auto;width:auto;gap:12mm}}
-  </style></head><body><div class="printbar"><button onclick="window.print()">Print / Save as PDF</button><span>Official pharmacy template · two copies per landscape page · only selected non-OK medicines.</span></div>${pages}</body></html>`;
+    @page{size:A4 portrait;margin:0}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#132238;margin:0;background:#e9eef3;font-size:10.5pt;line-height:1.45}.sheet{position:relative;width:210mm;min-height:297mm;margin:0 auto 8mm;background:#fff;padding:18mm 18mm 16mm;border-top:4mm solid #c81e35;break-after:page}header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:9mm;border-bottom:1px solid #dce3ea}.brand{color:#132238;font-weight:800;letter-spacing:.13em;font-size:11pt}.pharmacy{margin-top:2mm;color:#667085;font-size:8.5pt;line-height:1.5}.important{color:#c81e35;background:#fff1f3;border:1px solid #fecdd3;border-radius:20px;padding:2.5mm 5mm;font-weight:800;letter-spacing:.08em;font-size:8pt}.title{margin:12mm 0 7mm}.title span{color:#c81e35;text-transform:uppercase;font-weight:800;letter-spacing:.14em;font-size:8pt}.title h1{font-size:24pt;line-height:1.1;margin:2mm 0;color:#132238}.title p{margin:0;color:#667085}.patient{display:grid;grid-template-columns:1fr 45mm;gap:5mm;background:#f6f8fa;border:1px solid #e5eaf0;border-radius:4mm;padding:5mm 6mm;margin-bottom:8mm}.patient div{display:flex;flex-direction:column;gap:1mm}.patient small{color:#7a8797;font-size:7.5pt;font-weight:700;letter-spacing:.1em}.patient b{font-size:11pt}.body p{margin:0 0 5mm}.script-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;margin:7mm 0;border:1px solid #d5dde6;border-radius:3mm;overflow:hidden}.script-table th{background:#132238;color:#fff;text-align:left;font-size:8pt;letter-spacing:.08em;padding:3.5mm 4mm}.script-table td{border-top:1px solid #dce3ea;padding:4.5mm 4mm;vertical-align:middle;overflow-wrap:anywhere}.script-table td:first-child,.script-table th:first-child{width:68%}.script-table td:nth-child(2){font-weight:700;color:#c81e35}.note{background:#fff8e8;border-left:3px solid #e6a700;padding:4mm}.footer{margin-top:10mm}.page-no{position:absolute;right:18mm;bottom:10mm;color:#98a2b3;font-size:8pt}.printbar{position:sticky;top:0;z-index:2;background:#fff;border:1px solid #cbd5e1;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center}.printbar button{padding:9px 14px;border:0;border-radius:8px;background:#132238;color:white;cursor:pointer}@media print{body{background:#fff}.printbar{display:none}.sheet{margin:0}}
+  </style></head><body><div class="printbar"><button onclick="window.print()">Print / Save as PDF</button><span>Single-copy pharmacy prescription request · one row per selected medicine.</span></div>${pages}</body></html>`;
+}
+function writeScriptLetterPdf(doc, r) {
+  const items = (r.items || []).filter(isActionableScriptItem);
+  const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 7)) }, (_, index) => items.slice(index * 7, index * 7 + 7));
+  const navy = '#132238', red = '#c81e35', muted = '#667085', line = '#d5dde6', pale = '#f6f8fa';
+  const left = 52, right = 543, width = right - left;
+  chunks.forEach((chunk, pageIndex) => {
+    if (pageIndex > 0) doc.addPage({ size: 'A4', layout: 'portrait', margin: 0 });
+    doc.rect(0, 0, 595.28, 12).fill(red);
+    doc.fillColor(navy).font('Helvetica-Bold').fontSize(11).text('HIBISCUS PHARMACY', left, 45, { characterSpacing: 1.4 });
+    doc.fillColor(muted).font('Helvetica').fontSize(8.5).text('Hibiscus Day and Night Pharmacy · Hibiscus Shopping Centre\n4/8 Leanyer Dr, Leanyer NT 0812 · (08) 8945 5955', left, 65, { lineGap: 3 });
+    doc.roundedRect(451, 44, 92, 25, 12).fillAndStroke('#fff1f3', '#fecdd3');
+    doc.fillColor(red).font('Helvetica-Bold').fontSize(8).text('IMPORTANT', 467, 53, { width: 62, align: 'center', characterSpacing: .7 });
+    doc.moveTo(left, 103).lineTo(right, 103).strokeColor(line).lineWidth(1).stroke();
+
+    doc.fillColor(red).font('Helvetica-Bold').fontSize(8).text('PRESCRIPTION REQUEST', left, 129, { characterSpacing: 1.2 });
+    doc.fillColor(navy).font('Helvetica-Bold').fontSize(24).text('New Prescription Required', left, 148);
+    doc.fillColor(muted).font('Helvetica').fontSize(10).text('Medication continuity request for clinical review', left, 182);
+
+    doc.roundedRect(left, 212, width, 58, 8).fillAndStroke(pale, '#e5eaf0');
+    doc.fillColor('#7a8797').font('Helvetica-Bold').fontSize(7.5).text('PATIENT', left + 16, 227, { characterSpacing: .8 });
+    doc.fillColor(navy).fontSize(11).text(cleanText(r.patientFullName), left + 16, 243, { width: 335, ellipsis: true });
+    doc.fillColor('#7a8797').fontSize(7.5).text('DATE', 451, 227, { characterSpacing: .8 });
+    doc.fillColor(navy).fontSize(10).text(dateDisplay(r.createdAt || toISODate(todayDate())), 451, 243, { width: 78 });
+
+    doc.fillColor(navy).font('Helvetica').fontSize(10).text('Dear Dr,', left, 295);
+    doc.fontSize(10).text('Our client receives monthly medication from our pharmacy. Please review the medicines below and provide new prescriptions where clinically appropriate.', left, 320, { width, lineGap: 2 });
+
+    const tableY = 370, medicineWidth = 334, requestWidth = width - medicineWidth, headerHeight = 30;
+    doc.roundedRect(left, tableY, width, headerHeight, 7).fill(navy);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8).text('MEDICATION', left + 13, tableY + 11, { characterSpacing: .7 });
+    doc.text('REQUEST', left + medicineWidth + 13, tableY + 11, { characterSpacing: .7 });
+    let y = tableY + headerHeight;
+    chunk.forEach(item => {
+      const medicine = cleanText(item.medicineName || item.drugDescription);
+      const detail = lastRepeatOwingDetail(item);
+      const medHeight = doc.font('Helvetica').fontSize(9.5).heightOfString(medicine, { width: medicineWidth - 26 });
+      const detailHeight = doc.font('Helvetica-Bold').fontSize(9.5).heightOfString(detail, { width: requestWidth - 26 });
+      const rowHeight = Math.max(39, Math.ceil(Math.max(medHeight, detailHeight) + 20));
+      doc.rect(left, y, width, rowHeight).fillAndStroke('#ffffff', line);
+      doc.moveTo(left + medicineWidth, y).lineTo(left + medicineWidth, y + rowHeight).strokeColor(line).stroke();
+      doc.fillColor(navy).font('Helvetica').fontSize(9.5).text(medicine, left + 13, y + 10, { width: medicineWidth - 26, height: rowHeight - 14 });
+      doc.fillColor(red).font('Helvetica-Bold').fontSize(9.5).text(detail, left + medicineWidth + 13, y + 10, { width: requestWidth - 26, height: rowHeight - 14 });
+      y += rowHeight;
+    });
+    if (r.note) {
+      const note = `Note: ${cleanText(r.note)}`;
+      const noteHeight = Math.max(38, doc.font('Helvetica').fontSize(9).heightOfString(note, { width: width - 32 }) + 18);
+      doc.roundedRect(left, y + 18, width, noteHeight, 5).fill('#fff8e8');
+      doc.fillColor(navy).font('Helvetica').fontSize(9).text(note, left + 16, y + 27, { width: width - 32 });
+      y += noteHeight + 18;
+    }
+    const closingY = Math.min(Math.max(y + 28, 520), 700);
+    doc.fillColor(navy).font('Helvetica').fontSize(10).text('Thank you for reviewing this request.', left, closingY);
+    doc.text('Kind regards,', left, closingY + 34);
+    doc.font('Helvetica-Bold').text('Hibiscus Pharmacy', left, closingY + 50);
+    doc.fillColor('#98a2b3').font('Helvetica').fontSize(8).text(`Page ${pageIndex + 1} of ${chunks.length}`, right - 70, 807, { width: 70, align: 'right' });
+  });
+  doc.end();
 }
 app.get('/api/letter/:requestId', (req, res) => { const store = readStore(); const r = store.scriptRequests.find(x => x.id === req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.type('html').send(scriptLetterHtml(r)); });
 app.get('/api/letter/:requestId/pdf', (req, res) => {
@@ -1280,38 +1342,9 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
   if (!r) return res.status(404).send('Request not found');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="last-repeat-and-owing-${String(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
-  const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'landscape' });
+  const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'portrait' });
   doc.pipe(res);
-  const allItems = (r.items || []).filter(isActionableScriptItem);
-  const chunks = Array.from({ length: Math.max(1, Math.ceil(allItems.length / 8)) }, (_, index) => allItems.slice(index * 8, index * 8 + 8));
-  function drawCopy(x, chunk) {
-    const width = 360;
-    doc.fillColor('#ff0000').font('Helvetica-Bold').fontSize(26).text('IMPORTANT', x, 34, { width });
-    doc.fillColor('#111111').font('Helvetica').fontSize(7.5).text('Hibiscus Day and Night Pharmacy\n\nHibiscus Shopping Centre,\n\n4/8 Leanyer Dr,\n\nLeanyer NT 0812\n\n(08) 8945 5955', x, 78, { width, lineGap: 0 });
-    doc.font('Helvetica-Bold').fontSize(12).text('New Prescription Required', x, 174, { width });
-    doc.font('Helvetica').fontSize(9).text('Dear Dr,', x, 213, { width });
-    doc.fontSize(8.5).text(`Our client, ${r.patientFullName} is picking up monthly medication from us. The following is the prescription that are due in the next two months:`, x, 239, { width, height: 38 });
-    const tableY = 284, rowHeight = 26, medicineWidth = 215, detailWidth = width - medicineWidth;
-    for (let index = 0; index < 8; index += 1) {
-      const item = chunk[index];
-      const y = tableY + index * rowHeight;
-      doc.rect(x, y, medicineWidth, rowHeight).stroke('#111111');
-      doc.rect(x + medicineWidth, y, detailWidth, rowHeight).stroke('#111111');
-      if (!item) continue;
-      const detail = lastRepeatOwingDetail(item);
-      const medicine = cleanText(item.medicineName || item.drugDescription);
-      doc.font('Helvetica').fontSize(medicine.length > 55 ? 6.3 : 7.3).text(medicine, x + 5, y + 5, { width: medicineWidth - 10, height: rowHeight - 8 });
-      doc.fontSize(7.3).text(detail, x + medicineWidth + 5, y + 6, { width: detailWidth - 10, height: rowHeight - 8 });
-    }
-    doc.font('Helvetica').fontSize(8.5).text('Kindly review and provide the prescription if it is appropriate. Thanks a lot.', x, 505, { width });
-    doc.text('Kind Regards,\nHibiscus Pharmacy', x, 545, { width });
-  }
-  chunks.forEach((chunk, index) => {
-    if (index > 0) doc.addPage({ size:'A4', layout:'landscape', margin:0 });
-    drawCopy(40, chunk);
-    drawCopy(442, chunk);
-  });
-  doc.end();
+  writeScriptLetterPdf(doc, r);
 });
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => console.log(`Webster Pack Pro v2.3.5 running on http://localhost:${PORT}`));
@@ -1326,4 +1359,4 @@ if (process.env.NODE_ENV !== 'test') {
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf };

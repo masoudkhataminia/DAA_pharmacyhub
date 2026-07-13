@@ -13,12 +13,15 @@ assert.equal(inferRequestFlag(0, false, {scriptLowRepeatThreshold:1}), 'New scri
 assert.equal(inferRequestFlag(1, false, {scriptLowRepeatThreshold:1}), 'Low repeats');
 assert.equal(inferRequestFlag(4, true, {scriptLowRepeatThreshold:1}), 'Script owing');
 assert.equal(inferRequestFlag(null, false, {scriptLowRepeatThreshold:1}), 'Manual request');
-assert.equal(isActionableScriptItem({ repeatsLeft:2, status:'Low repeats' }), false);
+assert.equal(isActionableScriptItem({ repeatsLeft:3, status:'Low repeats' }), true);
 assert.equal(isActionableScriptItem({ status:'Manual review' }), false);
 assert.equal(isActionableScriptItem({ repeatsLeft:1, status:'Low repeats' }), true);
 assert.equal(isActionableScriptItem({ repeatsLeft:4, owing:true, status:'Script owing' }), true);
 assert.equal(isActionableScriptItem({ status:'Manual request' }), true);
-assert.equal(isActionableScriptItem({ repeatsLeft:2, status:'Manual request' }), false);
+assert.equal(isActionableScriptItem({ repeatsLeft:2, status:'Manual request' }), true);
+assert.equal(lastRepeatOwingDetail({ repeatsLeft:3, status:'Low repeats' }), '3 repeats left');
+assert.equal(lastRepeatOwingDetail({ owing:true, owingCount:3, status:'Script owing' }), '3 scripts owing');
+assert.equal(lastRepeatOwingDetail({ repeatsLeft:0, status:'New script required' }), 'New script needed');
 const p = computePatient({fullName:'Test Patient', cycleDays:14, lastPickupDate:'01/06/2026', packLeadDays:3, dispenseLeadDays:1, orderLeadDays:7, packStatus:'Not started', dispenseStatus:'Not dispensed'}, {defaultCycleDays:14, defaultPackLeadDays:3, defaultDispenseLeadDays:1, defaultOrderLeadDays:7, urgentWindowDays:2, dueSoonWindowDays:7});
 assert.equal(p.nextPickupDisplay, '15/06/2026');
 
@@ -98,21 +101,21 @@ assert.ok(overview.some(row => row.overviewSource === 'Medication list'));
 const officialLetter = scriptLetterHtml({
   patientFullName: 'TEST, PATIENT',
   items: [
-    { medicineName:'TEST MEDICINE', repeatsLeft:0, status:'Low repeats' },
-    { medicineName:'OWING MEDICINE', owing:true, status:'Script owing' },
-    { medicineName:'TWO REPEAT MEDICINE', repeatsLeft:2, status:'Low repeats' },
+    { medicineName:'TEST MEDICINE', repeatsLeft:3, status:'Low repeats' },
+    { medicineName:'OWING MEDICINE', owing:true, owingCount:3, status:'Script owing' },
+    { medicineName:'NEW SCRIPT MEDICINE', repeatsLeft:0, status:'New script required' },
     { medicineName:'MANUAL REVIEW MEDICINE', repeatsLeft:'', status:'Manual review' }
   ]
 });
-assert.match(officialLetter, /@page\{size:A4 landscape/);
-assert.equal((officialLetter.match(/class="important">IMPORTANT/g) || []).length, 2);
-assert.equal((officialLetter.match(/TEST MEDICINE/g) || []).length, 2);
-assert.equal((officialLetter.match(/Last repeat/g) || []).length, 2);
-assert.equal((officialLetter.match(/OWING/g) || []).length, 4);
-assert.doesNotMatch(officialLetter, /TWO REPEAT MEDICINE/);
+assert.match(officialLetter, /@page\{size:A4 portrait/);
+assert.equal((officialLetter.match(/class="important">IMPORTANT/g) || []).length, 1);
+assert.equal((officialLetter.match(/TEST MEDICINE/g) || []).length, 1);
+assert.match(officialLetter, /3 repeats left/);
+assert.match(officialLetter, /3 scripts owing/);
+assert.match(officialLetter, /New script needed/);
 assert.doesNotMatch(officialLetter, /MANUAL REVIEW MEDICINE/);
-assert.match(officialLetter, /color:#f00/);
-assert.match(officialLetter, /two copies per landscape page/);
+assert.doesNotMatch(officialLetter, /&nbsp;/);
+assert.match(officialLetter, /Single-copy pharmacy prescription request/);
 
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
