@@ -2,7 +2,7 @@ import assert from 'assert';
 import fs from 'node:fs';
 import XLSX from 'xlsx';
 process.env.NODE_ENV = 'test';
-const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances } = await import('../server.js');
+const { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview } = await import('../server.js');
 
 assert.equal(dateDisplay('08/06/2026'), '08/06/2026');
 assert.equal(dateDisplay('2026-06-08'), '08/06/2026');
@@ -62,6 +62,19 @@ assert.deepEqual(linkedRepeats.balances.map(row => row.repeatsLeft), [3, 1, 2, 4
 assert.equal(linkedRepeats.balances.at(-1).owing, true);
 assert.equal(linkedRepeats.scripts[1].matchedDrugCode, 'CALI2');
 
+const overview = buildPatientMedicationOverview(
+  [{ medication: 'RAMIPRIL - RAMIPRIL (APO) 5mg TAB', drugCode: 'APOR3', balanceQty: 20 }],
+  [
+    { drugDescription: 'RAMIPRIL (APO) TABLETS 5mg', repeatsLeft: 3, requestFlag: 'OK', scriptNumber: '10' },
+    { drugDescription: 'UNMATCHED MEDICINE TABLETS 20mg', repeatsLeft: 1, requestFlag: 'Low repeats', scriptNumber: '11' }
+  ],
+  [{ medicineName: 'MANUAL MEDICINE', directions: 'Take one daily' }]
+);
+assert.equal(overview.length, 3);
+assert.equal(overview.filter(row => /RAMIPRIL/.test(row.medication)).length, 1);
+assert.ok(overview.some(row => row.overviewSource === 'Script list' && row.scriptNumber === '11'));
+assert.ok(overview.some(row => row.overviewSource === 'Medication list'));
+
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
 assert.match(publicApp, /const noScript = m\.newScriptNeeded === true/);
@@ -71,4 +84,6 @@ assert.match(publicApp, /items\.filter\(item=>item\.selected\)/);
 assert.match(publicApp, /s\.matchedMedication \|\| s\.drugDescription/);
 assert.match(publicApp, /refreshBtn'\)\.addEventListener\('click',\(\)=>syncMyPakPatients\(\)\)/);
 assert.match(publicApp, /syncMyPakPatients\(\{silent:true\}\)/);
+assert.match(publicApp, /Medications, pill balance & scripts/);
+assert.doesNotMatch(publicApp, /<h3>Imported medication list<\/h3>/);
 console.log('Smoke tests passed.');

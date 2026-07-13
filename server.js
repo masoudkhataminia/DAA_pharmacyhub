@@ -452,6 +452,7 @@ function linkScriptsToMedicationBalances(balances = [], scripts = []) {
         owing: !!script.owing,
         requestFlag: script.requestFlag,
         scriptNumber: script.scriptNumber,
+        scriptDispenseDate: script.dispenseDate,
         matchedScriptDescription: script.drugDescription,
         repeatSource: 'Imported script list'
       };
@@ -463,6 +464,59 @@ function linkScriptsToMedicationBalances(balances = [], scripts = []) {
       return { ...script, matchedMedication: balance.medication, matchedDrugCode: balance.drugCode };
     })
   };
+}
+function buildPatientMedicationOverview(balances = [], scripts = [], medications = []) {
+  const linked = linkScriptsToMedicationBalances(balances, scripts);
+  const rows = linked.balances.map(balance => ({
+    ...balance,
+    overviewSource: balance.matchedScriptDescription ? 'MyPak + Script list' : 'MyPak',
+    overviewType: 'mypak'
+  }));
+  const rowByMedication = new Map(rows.map(row => [normalizeName(row.medication), row]));
+  for (const script of linked.scripts) {
+    if (script.matchedMedication) continue;
+    const row = {
+      medication: script.drugDescription,
+      direction: script.directions || '',
+      balanceQty: null,
+      weeklyQty: null,
+      repeatsLeft: script.repeatsLeft,
+      hasRepeatPosition: cleanText(script.repeatsLeft) !== '' && Number.isFinite(Number(script.repeatsLeft)),
+      owing: !!script.owing,
+      requestFlag: script.requestFlag,
+      scriptNumber: script.scriptNumber,
+      scriptDispenseDate: script.dispenseDate,
+      repeatSource: 'Imported script list',
+      overviewSource: 'Script list',
+      overviewType: 'script'
+    };
+    rows.push(row);
+    rowByMedication.set(normalizeName(row.medication), row);
+  }
+  for (const medication of medications) {
+    const key = normalizeName(medication.medicineName);
+    const existing = rowByMedication.get(key);
+    if (existing) {
+      if (!existing.direction) existing.direction = medication.directions || '';
+      if (!/Medication list/.test(existing.overviewSource)) existing.overviewSource += ' + Medication list';
+      continue;
+    }
+    const row = {
+      medication: medication.medicineName,
+      direction: medication.directions || '',
+      balanceQty: null,
+      weeklyQty: null,
+      repeatsLeft: null,
+      owing: false,
+      requestFlag: null,
+      scriptNumber: '',
+      overviewSource: 'Medication list',
+      overviewType: 'medication'
+    };
+    rows.push(row);
+    rowByMedication.set(key, row);
+  }
+  return rows.sort((a, b) => cleanText(a.medication).localeCompare(cleanText(b.medication)));
 }
 
 function headerMapFromRow(headerRow) {
@@ -987,6 +1041,7 @@ app.get('/api/patients/:id/details', (req, res) => {
   if (!p) return res.status(404).json({ error: 'Patient not found' });
   const key = normalizeName(p.fullName);
   const scripts = store.scripts.filter(s => s.patientNameKey === key);
+  const medications = store.medications.filter(m => m.patientNameKey === key);
   const medicationBalances = (store.mypakMedicationBalances || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(normalizeMyPakMedicationBalance);
   const prescriptions = (store.mypakPrescriptions || []).filter(m => String(m.patientId) === String(p.mypakPatientId)).map(normalizeMyPakMedicationBalance);
   const linkedBalances = linkScriptsToMedicationBalances(medicationBalances, scripts);
@@ -994,7 +1049,8 @@ app.get('/api/patients/:id/details', (req, res) => {
   const belongsToMpsPatient = row => String(row?.patientId ?? row?.patient?.hsId ?? '') === String(p.mpsPatientId || '');
   res.json({
     patient: computePatient(p, store.settings),
-    medications: store.medications.filter(m => m.patientNameKey === key),
+    medications,
+    medicationOverview: buildPatientMedicationOverview(medicationBalances, scripts, medications),
     medicationBalances: linkedBalances.balances,
     prescriptions: linkedPrescriptions.balances.map(m => ({ ...m, requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })),
     dispenseHistory: (store.mypakDispenseHistory || []).filter(m => String(m.patientId) === String(p.mypakPatientId)),
@@ -1100,4 +1156,4 @@ if (process.env.NODE_ENV !== 'test') {
   if (Number.isFinite(syncMinutes) && syncMinutes > 0) setInterval(() => { if (withinSyncWindow()) mypakSyncService.syncPatients().catch(() => {}); }, syncMinutes * 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview };
