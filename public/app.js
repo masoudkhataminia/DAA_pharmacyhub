@@ -2,7 +2,7 @@ let STATE = null;
 let selectedPatientId = null;
 let editPatientId = null;
 let MPS_CONNECTION = null;
-const CLIENT_BUILD_VERSION = '20260714-last-repeat-owing-v1';
+const CLIENT_BUILD_VERSION = '20260714-script-delete-v2';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -258,9 +258,15 @@ async function savePatient(e){
 }
 function renderScriptPage(){
   renderScriptPatientSearch();
-  $('#recentRequests').innerHTML = (STATE.scriptRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th>Status / next action</th><th>Request</th></tr></thead><tbody>${STATE.scriptRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.patientFullName)}</td><td>${r.items.length}</td><td>${badge(r.status,r.status==='Received'?'ok':r.status==='Sent'?'blue':'warn')}<div class="table-actions">${r.status==='Draft'?`<button onclick="setScriptRequestStatus('${r.id}','Sent')">Mark sent</button>`:''}${r.status==='Sent'?`<button onclick="setScriptRequestStatus('${r.id}','Received')">Mark received</button>`:''}${r.status==='Received'?`<button class="ghost" onclick="setScriptRequestStatus('${r.id}','Draft')">Reopen</button>`:''}</div></td><td><a class="linkbtn" href="/api/letter/${r.id}/pdf" target="_blank">Last Repeat / Owing PDF</a> <a class="linkbtn" href="/api/letter/${r.id}" target="_blank">Preview</a></td></tr>`).join('')}</tbody></table>` : empty('No script requests created yet.');
+  $('#recentRequests').innerHTML = (STATE.scriptRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th>Status / next action</th><th>Request</th></tr></thead><tbody>${STATE.scriptRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.patientFullName)}</td><td>${r.items.length}</td><td>${badge(r.status,r.status==='Received'?'ok':r.status==='Sent'?'blue':'warn')}<div class="table-actions">${r.status==='Draft'?`<button onclick="setScriptRequestStatus('${r.id}','Sent')">Mark sent</button>`:''}${r.status==='Sent'?`<button onclick="setScriptRequestStatus('${r.id}','Received')">Mark received</button>`:''}${r.status==='Received'?`<button class="ghost" onclick="setScriptRequestStatus('${r.id}','Draft')">Reopen</button>`:''}</div></td><td><a class="linkbtn" href="/api/letter/${r.id}/pdf" target="_blank">Last Repeat / Owing PDF</a> <a class="linkbtn" href="/api/letter/${r.id}" target="_blank">Preview</a> <button class="danger-action" onclick="deleteScriptRequest('${r.id}','${esc(r.patientFullName)}')">Delete</button></td></tr>`).join('')}</tbody></table>` : empty('No script requests created yet.');
 }
 async function setScriptRequestStatus(id,status){await api(`/api/script-request/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(`Request marked ${status}.`);await loadState();showView('scripts');}
+async function deleteScriptRequest(id,patientName){
+  if(!window.confirm(`Delete the prescription request for ${patientName}?\n\nThe PDF record will be removed and its medicines will return to Needs review.`)) return;
+  const result=await api(`/api/script-request/${id}`,{method:'DELETE'});
+  toast(`Request deleted. ${result.reopenedItems||0} medicine(s) reopened for review.`);
+  await loadState(); showView('scripts');
+}
 function renderScriptPatientSearch(){
   const box = $('#scriptPatientSearch');
   const q = (box?.value || '').toLowerCase().trim();
@@ -539,7 +545,7 @@ $('#specialOrderForm').addEventListener('submit',specialOrderSubmit);
 $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFilter').addEventListener('change',renderSpecialOrders);
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
-window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
+window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.deleteScriptRequest=deleteScriptRequest; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
 window.addEventListener('focus', checkForAppUpdate);
 document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
 setInterval(checkForAppUpdate, 60000);

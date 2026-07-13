@@ -19,7 +19,7 @@ import { mapOfflineMpsPatients } from './services/mps/offline.js';
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-last-repeat-owing-v1';
+const APP_BUILD_VERSION = '20260714-script-delete-v2';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -1104,6 +1104,25 @@ app.post('/api/script-request', (req, res) => {
 });
 app.post('/api/prescription-automation', (req, res) => { const store = readStore(); const current = store.prescriptionAutomation || DEFAULT_STORE.prescriptionAutomation; store.prescriptionAutomation = { ...current, enabled: Boolean(req.body.enabled), recipients: cleanText(req.body.recipients), frequency: ['manual','interval','date'].includes(req.body.frequency) ? req.body.frequency : 'manual', intervalDays: Math.max(1, num(req.body.intervalDays, 14)), nextRunDate: dateOrBlank(req.body.nextRunDate), subjectTemplate: String(req.body.subjectTemplate || current.subjectTemplate).slice(0,500), bodyTemplate: String(req.body.bodyTemplate || current.bodyTemplate).slice(0,5000) }; audit(store, 'Updated prescription request schedule', { enabled: store.prescriptionAutomation.enabled, frequency: store.prescriptionAutomation.frequency, nextRunDate: store.prescriptionAutomation.nextRunDate }); writeStore(store); res.json(store.prescriptionAutomation); });
 app.patch('/api/script-request/:id', (req, res) => { const store = readStore(); const r = store.scriptRequests.find(x => x.id === req.params.id); if (!r) return res.status(404).json({ error: 'Request not found' }); Object.assign(r, req.body, { updatedAt: nowISO() }); audit(store, 'Updated script request', { patient: r.patientFullName, status: r.status }); writeStore(store); res.json(r); });
+app.delete('/api/script-request/:id', (req, res) => {
+  const store = readStore();
+  const index = store.scriptRequests.findIndex(x => x.id === req.params.id);
+  if (index < 0) return res.status(404).json({ error: 'Request not found' });
+  const [removed] = store.scriptRequests.splice(index, 1);
+  let reopenedItems = 0;
+  for (const [key, workflow] of Object.entries(store.prescriptionWorkflow || {})) {
+    if (workflow?.requestId === removed.id) { delete store.prescriptionWorkflow[key]; reopenedItems++; }
+  }
+  const patient = store.patients.find(x => x.id === removed.patientId);
+  if (patient) {
+    const latest = store.scriptRequests.find(x => x.patientId === patient.id);
+    patient.scriptRequestStatus = latest ? `${latest.status} request` : 'Not checked';
+    patient.updatedAt = nowISO();
+  }
+  audit(store, 'Deleted script request', { requestId: removed.id, patient: removed.patientFullName, itemCount: removed.items?.length || 0, reopenedItems });
+  writeStore(store);
+  res.json({ ok: true, id: removed.id, reopenedItems });
+});
 app.post('/api/doctor-updates', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.body.patientId); if (!p) return res.status(404).json({ error: 'Patient not found' }); const update = { id: id(), patientId: p.id, patientFullName: p.fullName, receivedDate: dateOrBlank(req.body.receivedDate) || toISODate(todayDate()), source: cleanText(req.body.source || 'Doctor letter'), changeType: cleanText(req.body.changeType || 'Medication change'), medicine: cleanText(req.body.medicine), oldDirection: cleanText(req.body.oldDirection), newDirection: cleanText(req.body.newDirection), effectiveFrom: cleanText(req.body.effectiveFrom || 'Needs review'), status: 'Pending pharmacist review', risk: cleanText(req.body.risk || 'Routine'), notes: cleanText(req.body.notes), createdAt: nowISO() }; store.doctorUpdates.unshift(update); p.urgent = p.urgent || /urgent|current|immediate/i.test(update.risk + ' ' + update.effectiveFrom); audit(store, 'Added doctor medication update', { patient: p.fullName, medicine: update.medicine, changeType: update.changeType }); writeStore(store); res.json(update); });
 app.patch('/api/doctor-updates/:id', (req, res) => { const store = readStore(); const u = store.doctorUpdates.find(x => x.id === req.params.id); if (!u) return res.status(404).json({ error: 'Doctor update not found' }); Object.assign(u, req.body, { updatedAt: nowISO() }); audit(store, 'Updated doctor update', { patient: u.patientFullName, status: u.status }); writeStore(store); res.json(u); });
 function lastRepeatOwingDetail(item = {}) {
