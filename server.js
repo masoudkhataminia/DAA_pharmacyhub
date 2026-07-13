@@ -175,7 +175,7 @@ const mpsSyncService = new MpsSyncService({ client: mpsClient, readStore, writeS
 async function refreshPatientPackJobs(store, patient) {
   if (!patient?.mypakPatientId) return [];
   const createdDateTo = new Date(); const createdDateFrom = new Date(createdDateTo); createdDateFrom.setFullYear(createdDateFrom.getFullYear() - 1);
-  const response = await mypakClient.listPackJobs({ pageIndex: 1, pageSize: 99999, status: ['0','1','2','3','4','5','6','7'], patientIds: [patient.mypakPatientId], patientGroupIds: [], createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString(), sortField: 'CreatedDate', sortOrder: -1 });
+  const response = await mypakClient.listPackJobs({ pageIndex: 1, pageSize: 200, status: ['0','1','2','3','4','5','6','7'], patientIds: [patient.mypakPatientId], patientGroupIds: [], createdDateFrom: createdDateFrom.toISOString(), createdDateTo: createdDateTo.toISOString(), sortField: 'CreatedDate', sortOrder: -1 });
   const incoming = packRows(response);
   store.mypakPackJobs = mergePackJobs(store.mypakPackJobs, incoming);
   return patientPackJobs(store, patient);
