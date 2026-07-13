@@ -74,12 +74,31 @@ async function refreshMyPakStatus(){
     $('#mypakSyncBtn').disabled = !connection.configured || sync.running;
   } catch (error) { $('#mypakConnection').textContent = 'Status unavailable'; $('#mypakSyncSummary').textContent = error.message; }
 }
-async function syncMyPakPatients(){
-  $('#mypakSyncBtn').disabled = true;
+async function syncMyPakPatients({silent=false}={}){
+  const buttons = [$('#mypakSyncBtn'), $('#mypakSyncBtnSettings'), $('#refreshBtn')].filter(Boolean);
+  const refreshButton = $('#refreshBtn');
+  buttons.forEach(button=>button.disabled=true);
+  if(refreshButton){refreshButton.dataset.label=refreshButton.textContent;refreshButton.textContent='Refreshing MyPak…';}
   const poll = setInterval(refreshMyPakStatus, 750);
-  try { await api('/api/mypak/sync/patients', { method: 'POST' }); toast('MyPak patient sync complete.'); await loadState(); }
+  try {
+    const result = await api('/api/mypak/sync/patients', { method: 'POST' });
+    if(result.started===false){
+      for(let attempt=0;attempt<120;attempt++){
+        const status=await api('/api/mypak/sync/status');
+        if(!status.running) break;
+        await new Promise(resolve=>setTimeout(resolve,500));
+      }
+    }
+    if(!silent) toast('Live MyPak balances refreshed.');
+    await loadState();
+  }
   catch (error) { toast(error.message); }
-  finally { clearInterval(poll); await refreshMyPakStatus(); }
+  finally {
+    clearInterval(poll);
+    buttons.forEach(button=>button.disabled=false);
+    if(refreshButton) refreshButton.textContent=refreshButton.dataset.label||'Refresh';
+    await refreshMyPakStatus();
+  }
 }
 function filteredPatients(){
   const q = ($('#patientSearch')?.value||'').toLowerCase();
@@ -396,7 +415,7 @@ function renderAll(){ renderDashboard(); renderImportReview(); renderPatients();
 async function loadState(){ STATE = await api('/api/state'); renderAll(); }
 
 $$('.nav').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
-$('#refreshBtn').addEventListener('click',loadState);
+$('#refreshBtn').addEventListener('click',()=>syncMyPakPatients());
 $('#mypakSyncBtn').addEventListener('click',syncMyPakPatients);
 $('#mypakSyncBtnSettings').addEventListener('click',syncMyPakPatients);
 $$('form.upload-card').forEach(f=>f.addEventListener('submit',importForm));
@@ -410,4 +429,4 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.quickSpecialStatus=quickSpecialStatus;
-loadState().then(refreshMyPakStatus).catch(e=>toast(e.message));
+loadState().then(async()=>{await refreshMyPakStatus();await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));

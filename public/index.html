@@ -124,7 +124,7 @@
     </section>
 
     <section id="settings" class="view">
-      <section class="panel" id="mypakPanelSettings"><div class="panel-head"><h2>Data & MyPak sync</h2><span>Read-only MyPak connection</span></div><div class="toolbar"><button id="mypakSyncBtnSettings" type="button">Sync now</button><span>Automatic sync: every 15 minutes, 08:00–18:00.</span></div><div class="three-col settings-imports"><form class="upload-card" data-import="patients"><h3>Patients</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="upload-card" data-import="medications"><h3>Medications</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="upload-card" data-import="scripts"><h3>Scripts</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></section>
+      <section class="panel" id="mypakPanelSettings"><div class="panel-head"><h2>Data & MyPak sync</h2><span>Read-only MyPak connection</span></div><div class="toolbar"><button id="mypakSyncBtnSettings" type="button">Sync now</button><span>Live sync on page open and Refresh; automatic sync every 15 minutes, 08:00–18:00.</span></div><div class="three-col settings-imports"><form class="upload-card" data-import="patients"><h3>Patients</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="upload-card" data-import="medications"><h3>Medications</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="upload-card" data-import="scripts"><h3>Scripts</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></section>
       <section class="panel"><div class="panel-head"><h2>Workflow settings</h2><span>default lead days and alert windows</span></div><form id="settingsForm" class="settings-grid"></form></section>
       <section class="panel"><div class="panel-head"><h2>Audit trail</h2><span>who/what/when style log</span></div><div id="auditLog" class="table-wrap"></div></section>
     </section>
@@ -132,6 +132,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260714-linked-repeats"></script>
+  <script src="/app.js?v=20260714-live-refresh"></script>
 </body>
 </html>

@@ -69,4 +69,6 @@ assert.match(publicApp, /repeats !== null && repeats < 2/);
 assert.match(publicApp, /item\?\.owing \|\| \/\^Script owing\$\//);
 assert.match(publicApp, /items\.filter\(item=>item\.selected\)/);
 assert.match(publicApp, /s\.matchedMedication \|\| s\.drugDescription/);
+assert.match(publicApp, /refreshBtn'\)\.addEventListener\('click',\(\)=>syncMyPakPatients\(\)\)/);
+assert.match(publicApp, /syncMyPakPatients\(\{silent:true\}\)/);
 console.log('Smoke tests passed.');
