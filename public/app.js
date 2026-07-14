@@ -3,7 +3,8 @@ let selectedPatientId = null;
 let editPatientId = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
-const CLIENT_BUILD_VERSION = '20260714-special-email-automation-v1';
+let SMART_QUEUE = null;
+const CLIENT_BUILD_VERSION = '20260714-smart-script-forecast-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -82,9 +83,9 @@ function patientDemographics(p){
   ];
   return `<h3>Patient information</h3><table><tbody>${fields.map(([label,value])=>`<tr><th>${esc(label)}</th><td>${esc(patientValue(value))}</td></tr>`).join('')}</tbody></table>`;
 }
-function myPakMedicationBalances(rows){
+function myPakMedicationBalances(rows,patientId){
   const scriptState = m => m.owing ? badge('OWING','danger') : m.requestFlag==='New script required' ? badge('New script required','warn') : m.requestFlag==='Low repeats' ? badge('Low repeats','warn') : m.requestFlag==='OK' ? badge('OK','ok') : m.newScriptNeeded===true ? badge('New script needed','warn') : m.newScriptNeeded===false ? badge('OK','ok') : '—';
-  return rows?.length ? `<table><thead><tr><th>Medication</th><th>Directions</th><th>Current balance</th><th>Required / week</th><th>Repeats</th><th>Owing / status</th><th>Script</th><th>Source</th><th>Last update / dispense</th></tr></thead><tbody>${rows.map(m=>{const lastDate=m.lastDispenseBalanceUpdated||m.scriptDispenseDate;return `<tr><td><b>${esc(m.medication||'—')}</b><br><small>${esc(m.drugCode||'')}</small></td><td>${esc(m.direction||'—')}</td><td>${esc(patientValue(m.balanceQty))}</td><td>${esc(patientValue(m.weeklyQty))}</td><td><b>${esc(patientValue(m.repeatsLeft))}</b></td><td>${scriptState(m)}</td><td>${m.scriptNumber?`<b>${esc(m.scriptNumber)}</b>`:'—'}</td><td>${esc(m.overviewSource||m.repeatSource||'MyPak')}</td><td>${esc(lastDate ? new Date(lastDate).toLocaleString() : '—')}</td></tr>`}).join('')}</tbody></table>` : empty('No medication, balance or script information is available for this patient.');
+  return rows?.length ? `<table><thead><tr><th>Medication</th><th>Directions</th><th>Current balance</th><th>Required / week</th><th>Repeats</th><th>Owing / status</th><th>Script</th><th>Source</th><th>Last update / dispense</th></tr></thead><tbody>${rows.map((m,index)=>{const lastDate=m.lastDispenseBalanceUpdated||m.scriptDispenseDate;const medication=m.medication||m.drugDescription||m.medicineName||'';const medicationArg=encodeURIComponent(medication).replaceAll("'",'%27');const inputId=`repeat-edit-${index}`;return `<tr><td><b>${esc(medication||'—')}</b><br><small>${esc(m.drugCode||'')}</small></td><td>${esc(m.direction||'—')}</td><td>${esc(patientValue(m.balanceQty))}</td><td>${esc(patientValue(m.weeklyQty))}</td><td><div class="repeat-editor"><button type="button" class="ghost" onclick="adjustRepeatOverride('${patientId}','${medicationArg}','${inputId}',-1)">−</button><input id="${inputId}" type="number" min="0" max="99" step="1" value="${esc(m.repeatsLeft??'')}"><button type="button" class="ghost" onclick="adjustRepeatOverride('${patientId}','${medicationArg}','${inputId}',1)">+</button><button type="button" onclick="saveRepeatOverride('${patientId}','${medicationArg}','${inputId}')">Save</button>${/Manual profile override/i.test(m.repeatSource||'')?`<button type="button" class="ghost" onclick="clearRepeatOverride('${patientId}','${medicationArg}')">Use synced</button>`:''}</div><small>${esc(m.repeatSource||'No repeat source')}</small></td><td>${scriptState(m)}</td><td>${m.scriptNumber?`<b>${esc(m.scriptNumber)}</b>`:'—'}</td><td>${esc(m.overviewSource||m.repeatSource||'MyPak')}</td><td>${esc(lastDate ? new Date(lastDate).toLocaleString() : '—')}</td></tr>`}).join('')}</tbody></table>` : empty('No medication, balance or script information is available for this patient.');
 }
 function mpsMedicationSummary(details){
   const packedDays = details.mpsPackedDays || [];
@@ -228,8 +229,30 @@ async function openPatient(id){
   const d = await api(`/api/patients/${id}/details`);
   const p = d.patient;
   $('#patientDetails').classList.remove('hidden');
-  $('#patientDetails').innerHTML = `<div class="panel-head"><h2>${esc(p.fullName)}</h2><span>${esc(p.calculatedStatus)} · Risk ${esc(p.riskScore)}</span></div><div class="two-col"><div><h3>Workflow</h3><p>Last pickup: <b>${esc(p.lastPickupDisplay||'not set')}</b><br>Next pickup: <b>${esc(p.nextPickupDisplay||'not set')}</b><br>Pack due: <b>${esc(p.packDueDisplay||'—')}</b><br>Dispense due: <b>${esc(p.dispenseDueDisplay||'—')}</b><br>Order due: <b>${esc(p.orderDueDisplay||'—')}</b></p><div class="badges">${patientBadges(p)}</div><p>${esc(p.notes||'')}</p><button onclick="editPatient('${p.id}')">Edit workflow</button> <button class="ghost" onclick="buildRequestForPatient('${p.id}')">Build script request</button></div><div>${patientDemographics(p)}</div></div><h3>MPS medication data</h3>${mpsMedicationSummary(d)}<h3>Medications, pill balance & scripts</h3>${myPakMedicationBalances(d.medicationOverview||d.medicationBalances)}`;
+  $('#patientDetails').innerHTML = `<div class="panel-head"><h2>${esc(p.fullName)}</h2><span>${esc(p.calculatedStatus)} · Risk ${esc(p.riskScore)}</span></div><div class="two-col"><div><h3>Workflow</h3><p>Last pickup: <b>${esc(p.lastPickupDisplay||'not set')}</b><br>Next pickup: <b>${esc(p.nextPickupDisplay||'not set')}</b><br>Pack due: <b>${esc(p.packDueDisplay||'—')}</b><br>Dispense due: <b>${esc(p.dispenseDueDisplay||'—')}</b><br>Order due: <b>${esc(p.orderDueDisplay||'—')}</b></p><div class="badges">${patientBadges(p)}</div><p>${esc(p.notes||'')}</p><button onclick="editPatient('${p.id}')">Edit workflow</button> <button class="ghost" onclick="buildRequestForPatient('${p.id}')">Build script request</button></div><div>${patientDemographics(p)}</div></div><h3>MPS medication data</h3>${mpsMedicationSummary(d)}<h3>Medications, pill balance & scripts</h3><p class="muted">Repeat values can be corrected here. Manual values override synced/imported repeats without changing MyPak.</p>${myPakMedicationBalances(d.medicationOverview||d.medicationBalances,p.id)}`;
   showView('patients');
+}
+async function saveRepeatOverride(patientId, encodedMedication, inputId){
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const medication = decodeURIComponent(encodedMedication);
+  await api(`/api/patients/${patientId}/repeat-override`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ medication, repeatsLeft:input.value.trim() }) });
+  toast('Repeat saved as a manual profile value.');
+  await loadState();
+  await openPatient(patientId);
+}
+async function clearRepeatOverride(patientId, encodedMedication){
+  const medication = decodeURIComponent(encodedMedication);
+  await api(`/api/patients/${patientId}/repeat-override`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ medication, repeatsLeft:'' }) });
+  toast('Manual repeat cleared; synced/imported value is in use.');
+  await loadState();
+  await openPatient(patientId);
+}
+async function adjustRepeatOverride(patientId, encodedMedication, inputId, delta){
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.value = String(Math.min(99, Math.max(0, Number(input.value || 0) + Number(delta || 0))));
+  await saveRepeatOverride(patientId, encodedMedication, inputId);
 }
 function editPatient(id){
   const p = patientPool().find(x=>x.id===id); if(!p) return;
@@ -359,6 +382,45 @@ async function buildRequestForPatient(id){
   if (items.length) renderRequestItems();
   renderScriptPatientSearch();
   showView('scripts');
+}
+function smartValue(value, suffix=''){
+  return value === null || value === undefined || value === '' ? '—' : `${Number.isFinite(Number(value)) ? Math.round(Number(value) * 10) / 10 : value}${suffix}`;
+}
+function renderSmartScriptResult(result){
+  SMART_QUEUE = result;
+  const assumptions = result.assumptions || {};
+  const summary = result.summary || {};
+  $('#smartSummary').innerHTML = `<b>${esc(summary.patientCount||0)}</b> patients · <b>${esc(summary.medicineCount||0)}</b> medicines ready for review · <b>${esc(summary.reviewCount||0)}</b> data issues<br><small>${esc(assumptions.packWeeks)}-week pack run · ${esc(assumptions.horizonMonths)} pack run(s) forecast · ${esc(assumptions.safetyDays)}-day safety buffer${assumptions.requireVerified?' · verified repeats only':''}</small>`;
+  $('#smartScriptQueue').innerHTML = (result.patients||[]).length ? result.patients.map(patient=>`<article class="smart-patient-card"><div class="smart-patient-head"><div><h3>${esc(patient.patientFullName)}</h3><p>${esc(patient.patientGroup||'No patient group')} · earliest predicted need ${esc(patient.earliestNeededBy||'—')}</p></div><div class="card-actions"><button class="ghost" onclick="openPatient('${patient.patientId}')">Open profile</button><button onclick="buildSmartRequestForPatient('${patient.patientId}')">Review request</button></div></div><div class="smart-medicine-list">${patient.medicines.map(item=>`<div class="smart-medicine"><div><b>${esc(item.medication)}</b><div class="badges">${badge(item.requestUrgency,item.owing?'danger':'warn')} ${item.owing?badge('Owing','danger'):''} ${badge(item.repeatConfidence,item.verifiedRepeat?'ok':'warn')}</div></div><div class="smart-metrics"><span>Balance <b>${esc(smartValue(item.balanceQty))}</b></span><span>Use/week <b>${esc(smartValue(item.weeklyQty))}</b></span><span>Current pack needs <b>${esc(smartValue(item.currentPackRequired))}</b></span><span>Repeats <b>${esc(smartValue(item.repeatsLeft))}</b></span><span>Total cover <b>${esc(smartValue(item.totalCoverageDays,' days'))}</b></span><span>Shortfall <b>${esc(smartValue(item.shortfallQty))}</b></span></div><p class="smart-calculation">Available ${esc(smartValue(item.projectedUnitsAvailable))} units vs estimated ${esc(smartValue(item.projectedConsumption))} units through the selected horizon + buffer. Predicted prescription need: <b>${esc(item.neededByDisplay||item.neededByDate||'—')}</b>.</p></div>`).join('')}</div></article>`).join('') : empty('No verified medicines need a script within this forecast. Check the data-review list below, or widen the options.');
+  const reviews = result.reviewItems || [];
+  $('#smartReviewQueue').innerHTML = reviews.length ? `<table><thead><tr><th>Patient</th><th>Medicine</th><th>Problem</th><th>Repeat source</th><th></th></tr></thead><tbody>${reviews.map(item=>`<tr><td><b>${esc(item.patientFullName)}</b></td><td>${esc(item.medication||'—')}</td><td>${esc(item.dataIssue || (item.repeatZeroNeedsCheck?'Unverified zero repeat':'Repeat needs verification'))}</td><td>${esc(item.repeatConfidence||item.source||'—')}</td><td><button class="ghost" onclick="openPatient('${item.patientId}')">Check / edit</button></td></tr>`).join('')}</tbody></table>` : empty('No repeat or balance data issues in this forecast.');
+}
+async function runSmartScriptForecast(event){
+  event?.preventDefault();
+  const data = new FormData($('#smartScriptForm'));
+  const params = new URLSearchParams({
+    packWeeks:data.get('packWeeks'), horizonMonths:data.get('horizonMonths'), safetyDays:data.get('safetyDays'),
+    includeOwing:data.has('includeOwing')?'1':'0', requireVerified:data.has('requireVerified')?'1':'0', includeIncomplete:data.has('includeIncomplete')?'1':'0'
+  });
+  $('#smartSummary').textContent = 'Analysing current balances, consumption and repeats…';
+  renderSmartScriptResult(await api(`/api/smart-script-queue?${params}`));
+}
+async function buildSmartRequestForPatient(patientId){
+  const patient = (SMART_QUEUE?.patients||[]).find(row=>row.patientId===patientId);
+  if (!patient) return toast('Run Smart Script Request again.');
+  await buildRequestForPatient(patientId);
+  const names = new Set(patient.medicines.map(item=>norm(item.medication)));
+  const items = JSON.parse($('#requestBuilder').dataset.items||'[]').map(item=>{
+    const selected = names.has(norm(item.medicineName));
+    if (!selected) return { ...item, selected:false, manualOverride:false };
+    const forecast = patient.medicines.find(row=>norm(row.medication)===norm(item.medicineName));
+    const repeats = repeatPosition(item.repeatsLeft);
+    const status = forecast?.owing ? 'Script owing' : repeats !== null && repeats <= 0 ? 'New script required' : 'Low repeats';
+    return { ...item, selected:true, manualOverride:true, status, owing:!!forecast?.owing || item.owing };
+  });
+  $('#requestBuilder').dataset.items = JSON.stringify(items);
+  renderRequestItems();
+  toast(`${items.filter(item=>item.selected).length} forecast medicine(s) selected for pharmacist review.`);
 }
 function renderRequestItems(){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
@@ -568,7 +630,7 @@ async function runSpecialEmailScheduler(){try{const result=await api('/api/speci
 function showView(id){
   $$('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===id));
   $$('.view').forEach(v=>v.classList.toggle('active',v.id===id));
-  const titles={dashboard:['Dashboard','Prioritise packing, dispensing, ordering and prescription requests by pickup risk.'],import:['Import Centre','Stage imports safely: detect HIND, link medicines, calculate scripts, review exceptions.'],patients:['Patients','Master list for Webster/Sachet cycle, pickup date and workflow flags.'],scripts:['Script Requests','Build GP letters from patient medicine/script data.'],special:['Special Orders / S8','RDH, Hibiscus One, CP/NT and controlled medicine ordering by due date.'],doctor:['Doctor Updates','Medication changes stay pending until reviewed.'],settings:['Settings & Audit','Configure lead times and track changes.']};
+  const titles={dashboard:['Dashboard','Prioritise packing, dispensing, ordering and prescription requests by pickup risk.'],import:['Import Centre','Stage imports safely: detect HIND, link medicines, calculate scripts, review exceptions.'],patients:['Patients','Master list for Webster/Sachet cycle, pickup date and workflow flags.'],scripts:['Script Requests','Build GP letters from patient medicine/script data.'],smart:['Smart Script Request','Forecast pack consumption and prescription coverage with auditable calculations.'],special:['Special Orders / S8','RDH, Hibiscus One, CP/NT and controlled medicine ordering by due date.'],doctor:['Doctor Updates','Medication changes stay pending until reviewed.'],settings:['Settings & Audit','Configure lead times and track changes.']};
   $('#pageTitle').textContent=titles[id][0]; $('#pageSubtitle').textContent=titles[id][1];
 }
 async function importForm(e){
@@ -611,6 +673,7 @@ $$('form.upload-card').forEach(f=>f.addEventListener('submit',importForm));
 $$('form.quick-report-upload').forEach(f=>f.addEventListener('submit',importForm));
 $('#patientSearch').addEventListener('input',renderPatients); $('#patientFilter').addEventListener('change',renderPatients);
 $('#scriptPatientSearch').addEventListener('input',renderScriptPatientSearch); $('#clearScriptSearch').addEventListener('click',()=>{ $('#scriptPatientSearch').value=''; renderScriptPatientSearch(); });
+$('#smartScriptForm').addEventListener('submit',runSmartScriptForecast);
 $('#savePatientBtn').addEventListener('click',savePatient);
 $('#doctorForm').addEventListener('submit',doctorSubmit);
 $('#doctorAiForm').addEventListener('submit',doctorAiSubmit);
@@ -621,6 +684,7 @@ $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 $('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailDisconnect').addEventListener('click',gmailDisconnect);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.deleteScriptRequest=deleteScriptRequest; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis;
+window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient;
 window.addEventListener('focus', checkForAppUpdate);
 document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
 setInterval(checkForAppUpdate, 60000);

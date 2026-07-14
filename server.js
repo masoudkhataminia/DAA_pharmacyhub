@@ -24,7 +24,7 @@ const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-token.enc');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-special-email-automation-v1';
+const APP_BUILD_VERSION = '20260714-smart-script-forecast-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -64,6 +64,7 @@ const DEFAULT_STORE = {
   specialOrders: [],
   specialOrderRequests: [],
   specialEmailLog: [],
+  repeatOverrides: {},
   packRecords: [],
   doctorUpdates: [],
   doctorChangeAnalyses: [],
@@ -561,6 +562,77 @@ function buildPatientMedicationOverview(balances = [], scripts = [], medications
     rowByMedication.set(key, row);
   }
   return rows.sort((a, b) => cleanText(a.medication).localeCompare(cleanText(b.medication)));
+}
+function repeatOverrideKey(patientId, medication) { return `${cleanText(patientId)}::${normalizeName(medication)}`; }
+function applyRepeatOverrides(rows = [], patientId, store, medicineField = row => row.medication || row.drugDescription || row.medicineName) {
+  return rows.map(row => {
+    const medication = medicineField(row);
+    const override = store.repeatOverrides?.[repeatOverrideKey(patientId, medication)];
+    if (!override) return row;
+    const repeatsLeft = Number(override.repeatsLeft);
+    return { ...row, repeatsLeft, hasRepeatPosition:true, newScriptNeeded:repeatsLeft <= 0, requestFlag:inferRequestFlag(repeatsLeft, row.owing, store.settings), repeatSource:'Manual profile override', repeatOverrideUpdatedAt:override.updatedAt };
+  });
+}
+function smartScriptForecast(row = {}, options = {}, forecastDate = todayDate()) {
+  const packWeeks = Math.min(8, Math.max(1, num(options.packWeeks, 4)));
+  const horizonMonths = Math.min(6, Math.max(1, num(options.horizonMonths, 2)));
+  const safetyDays = Math.min(28, Math.max(0, num(options.safetyDays, 7)));
+  const balanceText = cleanText(row.balanceQty ?? '');
+  const weeklyText = cleanText(row.weeklyQty ?? '');
+  const repeatText = cleanText(row.repeatsLeft ?? '');
+  const balance = balanceText === '' ? null : Number(balanceText);
+  const weeklyQty = weeklyText === '' ? null : Number(weeklyText);
+  const repeatsLeft = repeatText === '' ? null : Number(repeatText);
+  const source = cleanText(row.repeatSource || row.overviewSource || '');
+  const manualOverride = /manual profile override/i.test(source);
+  const importedScript = /imported script list|script list/i.test(source);
+  const repeatConfidence = manualOverride ? 'Verified manually' : importedScript ? 'Imported script' : Number.isFinite(repeatsLeft) ? 'MyPak value — verify if unexpected' : 'Missing repeat';
+  if (!Number.isFinite(balance) || !Number.isFinite(weeklyQty) || weeklyQty <= 0 || !Number.isFinite(repeatsLeft)) {
+    return { medication:cleanText(row.medication || row.drugDescription || row.medicineName), eligible:false, dataIssue:!Number.isFinite(repeatsLeft)?'Repeat missing':!Number.isFinite(balance)?'Balance missing':'Weekly consumption missing', balanceQty:balance, weeklyQty, repeatsLeft, repeatConfidence, source };
+  }
+  const cycleDays = packWeeks * 7;
+  const currentPackRequired = weeklyQty * packWeeks;
+  const onHandDays = Math.max(0, balance) / weeklyQty * 7;
+  const repeatCoverageDays = Math.max(0, repeatsLeft) * cycleDays;
+  const totalCoverageDays = onHandDays + repeatCoverageDays;
+  const horizonDays = horizonMonths * cycleDays;
+  const targetDays = horizonDays + safetyDays;
+  const projectedUnitsAvailable = Math.max(0, balance) + Math.max(0, repeatsLeft) * currentPackRequired;
+  const projectedConsumption = weeklyQty * targetDays / 7;
+  const shortfallQty = Math.max(0, Math.ceil(projectedConsumption - projectedUnitsAvailable));
+  const balanceAfterCurrentPack = balance - currentPackRequired;
+  const neededBy = addDays(forecastDate, row.owing ? 0 : Math.max(0, Math.floor(totalCoverageDays)));
+  const needsRequest = Boolean(row.owing) || totalCoverageDays < targetDays;
+  const requestUrgency = row.owing ? 'Owing — request now' : totalCoverageDays <= cycleDays ? 'Request now' : totalCoverageDays <= targetDays ? `Request within ${Math.max(0, Math.floor(totalCoverageDays - cycleDays))} days` : 'Covered';
+  return {
+    medication:cleanText(row.medication || row.drugDescription || row.medicineName), eligible:true, needsRequest, requestUrgency,
+    balanceQty:balance, weeklyQty, repeatsLeft, currentPackRequired, balanceAfterCurrentPack, onHandDays:Math.round(onHandDays), repeatCoverageDays,
+    totalCoverageDays:Math.round(totalCoverageDays), horizonDays, safetyDays, projectedConsumption:Math.ceil(projectedConsumption), projectedUnitsAvailable:Math.floor(projectedUnitsAvailable), shortfallQty,
+    neededByDate:toISODate(neededBy), neededByDisplay:formatAU(neededBy), repeatConfidence, verifiedRepeat:manualOverride || importedScript, repeatZeroNeedsCheck:repeatsLeft === 0 && !manualOverride && !importedScript,
+    owing:Boolean(row.owing), scriptNumber:cleanText(row.scriptNumber), source
+  };
+}
+function smartScriptQueue(store, options = {}) {
+  const requireVerified = String(options.requireVerified ?? '0') === '1' || options.requireVerified === true;
+  const includeOwing = String(options.includeOwing ?? '1') !== '0' && options.includeOwing !== false;
+  const includeIncomplete = String(options.includeIncomplete ?? '0') === '1' || options.includeIncomplete === true;
+  const patients = [];
+  const reviewItems = [];
+  for (const patient of (store.patients || []).filter(row => row.active !== false)) {
+    const patientKey = normalizeName(patient.fullName);
+    const balances = (store.mypakMedicationBalances || []).filter(row => String(row.patientId) === String(patient.mypakPatientId)).map(normalizeMyPakMedicationBalance);
+    const scripts = (store.scripts || []).filter(row => row.patientNameKey === patientKey);
+    const medications = (store.medications || []).filter(row => row.patientNameKey === patientKey);
+    const overview = applyRepeatOverrides(buildPatientMedicationOverview(balances, scripts, medications), patient.id, store);
+    const forecasts = overview.map(row => smartScriptForecast(row, options));
+    const due = forecasts.filter(item => item.eligible && item.needsRequest && (includeOwing || !item.owing) && (!requireVerified || item.verifiedRepeat));
+    const reviews = forecasts.filter(item => !item.eligible || item.repeatZeroNeedsCheck || (requireVerified && item.needsRequest && !item.verifiedRepeat));
+    if (includeIncomplete) reviewItems.push(...reviews.map(item => ({ ...item, patientId:patient.id, patientFullName:patient.fullName })));
+    if (!due.length) continue;
+    patients.push({ patientId:patient.id, patientFullName:patient.fullName, patientGroup:patient.patientGroup || '', packType:patient.packType || '', medicines:due.sort((a,b)=>a.totalCoverageDays-b.totalCoverageDays), earliestNeededBy:due.map(item=>item.neededByDate).sort()[0], riskScore:due.reduce((score,item)=>score+(item.owing?5:item.totalCoverageDays<=item.horizonDays?3:1),0) });
+  }
+  patients.sort((a,b)=>b.riskScore-a.riskScore || a.earliestNeededBy.localeCompare(b.earliestNeededBy) || a.patientFullName.localeCompare(b.patientFullName));
+  return { patients, reviewItems, summary:{ patientCount:patients.length, medicineCount:patients.reduce((sum,p)=>sum+p.medicines.length,0), reviewCount:reviewItems.length }, assumptions:{ packWeeks:Math.min(8,Math.max(1,num(options.packWeeks,4))), horizonMonths:Math.min(6,Math.max(1,num(options.horizonMonths,2))), safetyDays:Math.min(28,Math.max(0,num(options.safetyDays,7))), requireVerified, includeOwing, includeIncomplete } };
 }
 
 function headerMapFromRow(headerRow) {
@@ -1235,6 +1307,20 @@ app.get('/api/special-order-letter/:requestId', (req, res) => { const store = re
 app.get('/api/special-order-letter/:requestId/pdf', (req, res) => { const store = readStore(); const r = store.specialOrderRequests.find(x=>x.id===req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.setHeader('Content-Type','application/pdf'); res.setHeader('Content-Disposition', `inline; filename="special-order-request-${r.date}.pdf"`); const doc = new PDFDocument({ margin: 36, size: 'A4' }); doc.pipe(res); doc.font('Helvetica-Bold').fontSize(14).text('Hibiscus Day and Night Pharmacy'); doc.font('Helvetica').fontSize(10).text('Hibiscus Shopping Centre, 4/8 Leanyer Dr, Leanyer NT 0812'); doc.text('(08) 8945 5955'); doc.moveDown(); doc.font('Helvetica-Bold').fontSize(16).text(r.mode === 'internal' ? 'Special Order Checklist' : 'Special Medication / Prescription Request'); doc.font('Helvetica').fontSize(10).text(`Date: ${dateDisplay(r.date)}`); doc.text(`Recipient: ${r.recipient || 'External supplier / prescriber'}`); doc.moveDown(); doc.text('Please review/provide the following medicines required for upcoming Webster/sachet packs where appropriate.'); doc.moveDown(); const startX=doc.x, widths=[95,130,70,85,65,65]; function row(cols, header=false){ const y=doc.y; const h=38; doc.font(header?'Helvetica-Bold':'Helvetica').fontSize(8); let x=startX; cols.forEach((c,i)=>{ doc.rect(x,y,widths[i],h).stroke(); doc.text(String(c??''),x+3,y+4,{width:widths[i]-6,height:h-8}); x+=widths[i]; }); doc.y=y+h; if(doc.y>735) doc.addPage(); } row(['Patient','Medicine','Strength','Source','Next pickup','Order due'], true); (r.items||[]).forEach(i=>row([i.patientFullName, i.medicine, i.strength||'', i.source||'', i.nextPickupDisplay||'', i.orderDueDisplay||''])); if(r.note){ doc.moveDown(); doc.font('Helvetica-Bold').text('Note:'); doc.font('Helvetica').text(r.note); } doc.moveDown(); doc.text('Kind Regards,'); doc.text('Hibiscus Pharmacy'); doc.end(); });
 
 app.patch('/api/patients/:id', (req, res) => { const store = readStore(); const p = store.patients.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Patient not found' }); const before = clone(p); const allowed = ['fullName','firstName','lastName','dob','phone','email','address','cycleDays','lastPickupDate','packLeadDays','dispenseLeadDays','orderLeadDays','packStatus','dispenseStatus','medicineOrderStatus','scriptRequestStatus','patientSuppliedMeds','s8Priority','urgent','notes','active','packType']; for (const k of allowed) if (k in req.body) p[k] = req.body[k]; p.lastPickupDate = dateOrBlank(p.lastPickupDate); p.email = cleanText(p.email); if (p.email && !validEmail(p.email)) return res.status(400).json({ error:'Patient email is invalid' }); p.matchKey = matchKeyFor(p); p.updatedAt = nowISO(); audit(store, 'Updated patient', { patient: p.fullName, before, after: p }); writeStore(store); res.json(computePatient(p, store.settings)); });
+app.patch('/api/patients/:id/repeat-override', (req, res) => {
+  const store = readStore(); const patient = store.patients.find(row => row.id === req.params.id);
+  if (!patient) return res.status(404).json({ error:'Patient not found' });
+  const medication = cleanText(req.body?.medication); if (!medication) return res.status(400).json({ error:'Medication is required' });
+  const key = repeatOverrideKey(patient.id, medication); const value = cleanText(req.body?.repeatsLeft ?? '');
+  if (value === '') { delete store.repeatOverrides[key]; audit(store, 'Cleared medication repeat override', { patient:patient.fullName, medication }); }
+  else {
+    const repeatsLeft = Number(value); if (!Number.isInteger(repeatsLeft) || repeatsLeft < 0 || repeatsLeft > 99) return res.status(400).json({ error:'Repeats must be a whole number from 0 to 99' });
+    store.repeatOverrides[key] = { patientId:patient.id, medication, repeatsLeft, updatedAt:nowISO() };
+    audit(store, 'Updated medication repeat override', { patient:patient.fullName, medication, repeatsLeft });
+  }
+  writeStore(store); res.json({ ok:true, override:store.repeatOverrides[key] || null });
+});
+app.get('/api/smart-script-queue', (req, res) => res.json(smartScriptQueue(readStore(), req.query)));
 app.get('/api/patients/:id/details', (req, res) => {
   const store = readStore();
   const p = store.patients.find(x => x.id === req.params.id);
@@ -1250,15 +1336,15 @@ app.get('/api/patients/:id/details', (req, res) => {
   res.json({
     patient: computePatient(p, store.settings),
     medications,
-    medicationOverview: buildPatientMedicationOverview(medicationBalances, scripts, medications),
-    medicationBalances: linkedBalances.balances,
-    prescriptions: linkedPrescriptions.balances.map(m => ({ ...m, requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })),
+    medicationOverview: applyRepeatOverrides(buildPatientMedicationOverview(medicationBalances, scripts, medications), p.id, store),
+    medicationBalances: applyRepeatOverrides(linkedBalances.balances, p.id, store),
+    prescriptions: applyRepeatOverrides(linkedPrescriptions.balances, p.id, store).map(m => ({ ...m, requestStatus: store.prescriptionWorkflow?.[String(m.prescriptionId)]?.status || 'not_requested' })),
     dispenseHistory: (store.mypakDispenseHistory || []).filter(m => String(m.patientId) === String(p.mypakPatientId)),
     doctors: store.mypakDoctors || [],
     mpsPackedDays: (store.mpsPackedDays || []).filter(belongsToMpsPatient).slice(0, 31),
     mpsPackedPrn: (store.mpsPackedPrn || []).filter(belongsToMpsPatient).slice(0, 50),
     mpsOrders: (store.mpsOrders || []).filter(belongsToMpsPatient).slice(0, 250),
-    scripts: linkedBalances.scripts,
+    scripts: applyRepeatOverrides(linkedBalances.scripts, p.id, store, row => row.matchedMedication || row.drugDescription),
     doctorUpdates: store.doctorUpdates.filter(u => u.patientId === p.id),
     scriptRequests: store.scriptRequests.filter(r => r.patientId === p.id)
   });
@@ -1509,4 +1595,4 @@ if (process.env.NODE_ENV !== 'test') {
   setInterval(() => processSpecialOrderEmailSchedules().catch(() => {}), 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, isS8Medication, specialOrderRecipients, shouldSendSpecialOrderEmail, processSpecialOrderEmailSchedules, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, applyRepeatOverrides, smartScriptForecast, smartScriptQueue, isS8Medication, specialOrderRecipients, shouldSendSpecialOrderEmail, processSpecialOrderEmailSchedules, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf };

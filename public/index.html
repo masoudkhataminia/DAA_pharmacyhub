@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260714-script-delete-v2" />
+  <link rel="stylesheet" href="/styles.css?v=20260714-smart-script-forecast-v1" />
 </head>
 <body>
   <aside class="sidebar">
@@ -15,6 +15,7 @@
     <button class="nav active" data-view="dashboard">Dashboard</button>
     <button class="nav" data-view="patients">Patients</button>
     <button class="nav" data-view="scripts">Script Requests</button>
+    <button class="nav" data-view="smart">Smart Script Request</button>
     <button class="nav" data-view="special">Special Orders / S8</button>
     <button class="nav" data-view="doctor">Doctor Updates</button>
     <button class="nav" data-view="settings">Settings & Audit</button>
@@ -100,6 +101,22 @@
       <details class="panel script-history"><summary>Recent script requests — open history</summary><div id="recentRequests" class="table-wrap"></div></details>
     </section>
 
+    <section id="smart" class="view">
+      <section class="panel smart-script-panel">
+        <div class="panel-head"><div><h2>Smart Script Request</h2><p class="muted">Forecasts when each medicine will run out using current tablet balance, weekly consumption, pack batch size and repeats remaining.</p></div><span>Decision support only · every medicine shows its calculation</span></div>
+        <form id="smartScriptForm" class="smart-controls">
+          <label class="field"><span>Weeks supplied per pack run</span><input name="packWeeks" type="number" min="1" max="8" value="4"></label>
+          <label class="field"><span>Forecast horizon</span><select name="horizonMonths"><option value="1">Current 4-week batch</option><option value="2" selected>Current + next month</option><option value="3">Next 3 months</option></select></label>
+          <label class="field"><span>Safety buffer (days)</span><input name="safetyDays" type="number" min="0" max="28" value="7"></label>
+          <div class="smart-options"><label><input name="includeOwing" type="checkbox" checked> Include owing scripts</label><label><input name="requireVerified" type="checkbox" checked> Only manually/import verified repeats</label><label><input name="includeIncomplete" type="checkbox" checked> Show data-quality review</label></div>
+          <button type="submit">Analyse script needs</button>
+        </form>
+        <div id="smartSummary" class="request-summary">Run the forecast to build the queue.</div>
+        <div id="smartScriptQueue" class="queue smart-queue"></div>
+      </section>
+      <details class="panel" open><summary>Repeat / balance data requiring review</summary><div id="smartReviewQueue" class="table-wrap"></div></details>
+    </section>
+
 
     <section id="special" class="view">
       <div class="two-col wide-left">
@@ -144,6 +161,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260714-special-email-automation-v1"></script>
+  <script src="/app.js?v=20260714-smart-script-forecast-v1"></script>
 </body>
 </html>

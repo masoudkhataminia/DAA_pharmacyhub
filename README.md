@@ -52,3 +52,11 @@ Create a Google OAuth Web application, enable the Gmail API, and register this e
 `https://daa.mypharmacyhub.net/api/gmail/callback`
 
 Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REDIRECT_URI` and a long random `GMAIL_TOKEN_KEY` in the server `.env`, restart the process, then use **Settings → Connect Gmail**.
+
+## Smart Script Request
+
+The Smart Script Request view forecasts prescription coverage from current balance, required quantity per week, repeats remaining, pack-run length, forecast horizon, and an optional safety buffer. The displayed calculation is deterministic and reviewable; it does not invent missing clinical data.
+
+For forecasting, one repeat is assumed to provide one complete pack run (four weeks by default). Medicines with missing balance, missing weekly use, or a suspicious unverified zero repeat are sent to the data-review list. Staff can correct a repeat from the patient profile; the manual override is audited and takes precedence over synced/imported values until **Use synced** is selected.
+
+The verified-only option is enabled by default. A pharmacist must review the forecast selection before generating a prescription request.
