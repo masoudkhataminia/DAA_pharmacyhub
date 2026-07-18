@@ -1491,28 +1491,33 @@ function lastRepeatOwingDetail(item = {}) {
   if (Number.isFinite(repeats)) return `${repeats} repeat${repeats === 1 ? '' : 's'} left`;
   return reason;
 }
+function letterPatientName(value) {
+  return cleanText(cleanText(value).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+([,;])/g, '$1'));
+}
 function scriptLetterHtml(r) {
   const rowHtml = items => items.map(i => `<tr><td>${htmlEsc(i.medicineName || i.drugDescription)}</td><td>${htmlEsc(lastRepeatOwingDetail(i))}</td></tr>`).join('');
   const items = (r.items || []).filter(isActionableScriptItem);
   const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 7)) }, (_, index) => items.slice(index * 7, index * 7 + 7));
+  const patientName = letterPatientName(r.patientFullName);
   const pages = chunks.map((chunk, index) => `<section class="sheet">
     <header><div><div class="brand">HIBISCUS PHARMACY</div><div class="pharmacy">Hibiscus Day and Night Pharmacy · Hibiscus Shopping Centre<br>4/8 Leanyer Dr, Leanyer NT 0812 · (08) 8945 5955</div></div><div class="important">IMPORTANT</div></header>
     <div class="title"><span>Prescription request</span><h1>New Prescription Required</h1><p>Medication continuity request for clinical review</p></div>
     <div class="date-card"><small>DATE</small><b>${htmlEsc(dateDisplay(r.createdAt || toISODate(todayDate())))}</b></div>
     <div class="body"><p>Dear Dr,</p>
-    <p>Our client, ${htmlEsc(r.patientFullName)}, receives monthly medication from our pharmacy. Please review the medicines below and provide new prescriptions where clinically appropriate.</p>
+    <p>Our client, ${htmlEsc(patientName)}, receives monthly medication from our pharmacy. Please review the medicines below and provide new prescriptions where clinically appropriate.</p>
     <table class="script-table"><thead><tr><th>MEDICATION</th><th>REQUEST</th></tr></thead><tbody>${rowHtml(chunk)}</tbody></table>
     ${r.note ? `<p class="note"><b>Note:</b> ${htmlEsc(r.note)}</p>` : ''}
     <p>Thank you for reviewing this request.</p><p class="footer">Kind regards,<br><b>Hibiscus Pharmacy</b></p></div>
     <div class="page-no">Page ${index + 1} of ${chunks.length}</div>
   </section>`).join('');
-  return `<!doctype html><html><head><title>New Prescription Required - ${htmlEsc(r.patientFullName)}</title><style>
+  return `<!doctype html><html><head><title>New Prescription Required - ${htmlEsc(patientName)}</title><style>
     @page{size:A4 portrait;margin:0}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#132238;margin:0;background:#e9eef3;font-size:10.5pt;line-height:1.45}.sheet{position:relative;width:210mm;min-height:297mm;margin:0 auto 8mm;background:#fff;padding:18mm 18mm 16mm;border-top:4mm solid #c81e35;break-after:page}header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:9mm;border-bottom:1px solid #dce3ea}.brand{color:#132238;font-weight:800;letter-spacing:.13em;font-size:11pt}.pharmacy{margin-top:2mm;color:#667085;font-size:8.5pt;line-height:1.5}.important{color:#c81e35;background:#fff1f3;border:1px solid #fecdd3;border-radius:20px;padding:2.5mm 5mm;font-weight:800;letter-spacing:.08em;font-size:8pt}.title{margin:12mm 0 7mm}.title span{color:#c81e35;text-transform:uppercase;font-weight:800;letter-spacing:.14em;font-size:8pt}.title h1{font-size:24pt;line-height:1.1;margin:2mm 0;color:#132238}.title p{margin:0;color:#667085}.date-card{display:flex;flex-direction:column;gap:1mm;width:45mm;background:#f6f8fa;border:1px solid #e5eaf0;border-radius:4mm;padding:5mm 6mm;margin:0 0 8mm auto}.date-card small{color:#7a8797;font-size:7.5pt;font-weight:700;letter-spacing:.1em}.date-card b{font-size:11pt}.body p{margin:0 0 5mm}.script-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;margin:7mm 0;border:1px solid #d5dde6;border-radius:3mm;overflow:hidden}.script-table th{background:#132238;color:#fff;text-align:left;font-size:8pt;letter-spacing:.08em;padding:3.5mm 4mm}.script-table td{border-top:1px solid #dce3ea;padding:4.5mm 4mm;vertical-align:middle;overflow-wrap:anywhere}.script-table td:first-child,.script-table th:first-child{width:68%}.script-table td:nth-child(2){font-weight:700;color:#c81e35}.note{background:#fff8e8;border-left:3px solid #e6a700;padding:4mm}.footer{margin-top:10mm}.page-no{position:absolute;right:18mm;bottom:10mm;color:#98a2b3;font-size:8pt}.printbar{position:sticky;top:0;z-index:2;background:#fff;border:1px solid #cbd5e1;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center}.printbar button{padding:9px 14px;border:0;border-radius:8px;background:#132238;color:white;cursor:pointer}@media print{body{background:#fff}.printbar{display:none}.sheet{margin:0}}
   </style></head><body><div class="printbar"><button onclick="window.print()">Print / Save as PDF</button><span>Single-copy pharmacy prescription request · one row per selected medicine.</span></div>${pages}</body></html>`;
 }
 function writeScriptLetterPdf(doc, r) {
   const items = (r.items || []).filter(isActionableScriptItem);
   const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 7)) }, (_, index) => items.slice(index * 7, index * 7 + 7));
+  const patientName = letterPatientName(r.patientFullName);
   const navy = '#132238', red = '#c81e35', muted = '#667085', line = '#d5dde6', pale = '#f6f8fa';
   const left = 52, right = 543, width = right - left;
   chunks.forEach((chunk, pageIndex) => {
@@ -1533,7 +1538,7 @@ function writeScriptLetterPdf(doc, r) {
     doc.fillColor(navy).fontSize(10).text(dateDisplay(r.createdAt || toISODate(todayDate())), 451, 243, { width: 78 });
 
     doc.fillColor(navy).font('Helvetica').fontSize(10).text('Dear Dr,', left, 295);
-    doc.fontSize(10).text(`Our client, ${cleanText(r.patientFullName)}, receives monthly medication from our pharmacy. Please review the medicines below and provide new prescriptions where clinically appropriate.`, left, 320, { width, lineGap: 2 });
+    doc.fontSize(10).text(`Our client, ${patientName}, receives monthly medication from our pharmacy. Please review the medicines below and provide new prescriptions where clinically appropriate.`, left, 320, { width, lineGap: 2 });
 
     const tableY = 370, medicineWidth = 334, requestWidth = width - medicineWidth, headerHeight = 30;
     doc.roundedRect(left, tableY, width, headerHeight, 7).fill(navy);
@@ -1573,7 +1578,7 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
   const r = store.scriptRequests.find(x => x.id === req.params.requestId);
   if (!r) return res.status(404).send('Request not found');
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="last-repeat-and-owing-${String(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
+  res.setHeader('Content-Disposition', `inline; filename="last-repeat-and-owing-${letterPatientName(r.patientFullName).replace(/[^a-z0-9]+/ig,'-')}.pdf"`);
   const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'portrait' });
   doc.pipe(res);
   writeScriptLetterPdf(doc, r);
