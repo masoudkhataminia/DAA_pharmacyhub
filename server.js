@@ -24,7 +24,7 @@ const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-token.enc');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260714-smart-script-forecast-v1';
+const APP_BUILD_VERSION = '20260718-patient-request-email-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -1499,6 +1499,7 @@ function scriptLetterHtml(r) {
   const items = (r.items || []).filter(isActionableScriptItem);
   const chunks = Array.from({ length: Math.max(1, Math.ceil(items.length / 7)) }, (_, index) => items.slice(index * 7, index * 7 + 7));
   const patientName = letterPatientName(r.patientFullName);
+  const emailEndpoint = `/api/script-request/${encodeURIComponent(cleanText(r.id))}/email-patient`;
   const pages = chunks.map((chunk, index) => `<section class="sheet">
     <header><div><div class="brand">HIBISCUS PHARMACY</div><div class="pharmacy">Hibiscus Day and Night Pharmacy · Hibiscus Shopping Centre<br>4/8 Leanyer Dr, Leanyer NT 0812 · (08) 8945 5955</div></div><div class="important">IMPORTANT</div></header>
     <div class="title"><span>Prescription request</span><h1>New Prescription Required</h1><p>Medication continuity request for clinical review</p></div>
@@ -1512,7 +1513,22 @@ function scriptLetterHtml(r) {
   </section>`).join('');
   return `<!doctype html><html><head><title>New Prescription Required - ${htmlEsc(patientName)}</title><style>
     @page{size:A4 portrait;margin:0}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#132238;margin:0;background:#e9eef3;font-size:10.5pt;line-height:1.45}.sheet{position:relative;width:210mm;min-height:297mm;margin:0 auto 8mm;background:#fff;padding:18mm 18mm 16mm;border-top:4mm solid #c81e35;break-after:page}header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:9mm;border-bottom:1px solid #dce3ea}.brand{color:#132238;font-weight:800;letter-spacing:.13em;font-size:11pt}.pharmacy{margin-top:2mm;color:#667085;font-size:8.5pt;line-height:1.5}.important{color:#c81e35;background:#fff1f3;border:1px solid #fecdd3;border-radius:20px;padding:2.5mm 5mm;font-weight:800;letter-spacing:.08em;font-size:8pt}.title{margin:12mm 0 7mm}.title span{color:#c81e35;text-transform:uppercase;font-weight:800;letter-spacing:.14em;font-size:8pt}.title h1{font-size:24pt;line-height:1.1;margin:2mm 0;color:#132238}.title p{margin:0;color:#667085}.date-card{display:flex;flex-direction:column;gap:1mm;width:45mm;background:#f6f8fa;border:1px solid #e5eaf0;border-radius:4mm;padding:5mm 6mm;margin:0 0 8mm auto}.date-card small{color:#7a8797;font-size:7.5pt;font-weight:700;letter-spacing:.1em}.date-card b{font-size:11pt}.body p{margin:0 0 5mm}.script-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;margin:7mm 0;border:1px solid #d5dde6;border-radius:3mm;overflow:hidden}.script-table th{background:#132238;color:#fff;text-align:left;font-size:8pt;letter-spacing:.08em;padding:3.5mm 4mm}.script-table td{border-top:1px solid #dce3ea;padding:4.5mm 4mm;vertical-align:middle;overflow-wrap:anywhere}.script-table td:first-child,.script-table th:first-child{width:68%}.script-table td:nth-child(2){font-weight:700;color:#c81e35}.note{background:#fff8e8;border-left:3px solid #e6a700;padding:4mm}.footer{margin-top:10mm}.page-no{position:absolute;right:18mm;bottom:10mm;color:#98a2b3;font-size:8pt}.printbar{position:sticky;top:0;z-index:2;background:#fff;border:1px solid #cbd5e1;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center}.printbar button{padding:9px 14px;border:0;border-radius:8px;background:#132238;color:white;cursor:pointer}@media print{body{background:#fff}.printbar{display:none}.sheet{margin:0}}
-  </style></head><body><div class="printbar"><button onclick="window.print()">Print / Save as PDF</button><span>Single-copy pharmacy prescription request · one row per selected medicine.</span></div>${pages}</body></html>`;
+  </style></head><body><div class="printbar"><button onclick="printRequest()">Print / Save as PDF</button><span>Single-copy pharmacy prescription request · one row per selected medicine.</span></div>${pages}<script>
+    async function printRequest(){
+      const shouldEmail=window.confirm('Would you also like to email this prescription request to the patient?');
+      if(shouldEmail){
+        try{
+          const response=await fetch(${JSON.stringify(emailEndpoint)},{method:'POST'});
+          const result=await response.json();
+          if(!response.ok) throw new Error(result.error||'Email failed');
+          window.alert('The prescription request was emailed to '+result.to+' from '+(result.sender||'the connected Gmail account')+'.');
+        }catch(error){
+          window.alert('The PDF will still print, but the email was not sent: '+error.message);
+        }
+      }
+      window.print();
+    }
+  </script></body></html>`;
 }
 function writeScriptLetterPdf(doc, r) {
   const items = (r.items || []).filter(isActionableScriptItem);
@@ -1572,6 +1588,62 @@ function writeScriptLetterPdf(doc, r) {
   });
   doc.end();
 }
+function createScriptLetterPdfBuffer(r) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'portrait' });
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    writeScriptLetterPdf(doc, r);
+  });
+}
+function scriptRequestPatientEmail(r) {
+  const patientName = letterPatientName(r.patientFullName);
+  const items = (r.items || []).filter(isActionableScriptItem);
+  const rows = items.map(item => `<tr><td style="padding:10px 12px;border-top:1px solid #dce3ea">${htmlEsc(item.medicineName || item.drugDescription)}</td><td style="padding:10px 12px;border-top:1px solid #dce3ea;color:#c81e35;font-weight:700">${htmlEsc(lastRepeatOwingDetail(item))}</td></tr>`).join('');
+  const itemText = items.map(item => `- ${cleanText(item.medicineName || item.drugDescription)}: ${lastRepeatOwingDetail(item)}`).join('\n');
+  return {
+    subject: `Prescription request - ${patientName}`,
+    text: `Hello ${patientName},\n\nHibiscus Pharmacy has prepared a prescription request for the medicines listed below. A copy of the request is attached as a PDF.\n\n${itemText}${r.note ? `\n\nNote: ${cleanText(r.note)}` : ''}\n\nPlease contact Hibiscus Pharmacy if you have any questions.\n\nKind regards,\nHibiscus Pharmacy`,
+    html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#132238;line-height:1.5;max-width:680px"><div style="border-top:8px solid #c81e35;padding-top:24px"><div style="font-size:13px;font-weight:800;letter-spacing:.12em">HIBISCUS PHARMACY</div><p style="color:#667085;font-size:13px">Hibiscus Day and Night Pharmacy · Hibiscus Shopping Centre<br>4/8 Leanyer Dr, Leanyer NT 0812 · (08) 8945 5955</p></div><h1 style="font-size:24px;margin-top:28px">Prescription request</h1><p>Hello ${htmlEsc(patientName)},</p><p>Hibiscus Pharmacy has prepared a prescription request for the medicines listed below. A copy of the request is attached as a PDF.</p><table style="width:100%;border-collapse:collapse;border:1px solid #d5dde6;margin:22px 0"><thead><tr><th style="background:#132238;color:white;text-align:left;padding:10px 12px">MEDICATION</th><th style="background:#132238;color:white;text-align:left;padding:10px 12px">REQUEST</th></tr></thead><tbody>${rows}</tbody></table>${r.note ? `<p style="background:#fff8e8;border-left:3px solid #e6a700;padding:12px"><b>Note:</b> ${htmlEsc(r.note)}</p>` : ''}<p>Please contact Hibiscus Pharmacy if you have any questions.</p><p>Kind regards,<br><b>Hibiscus Pharmacy</b></p></div>`
+  };
+}
+async function emailScriptRequestToPatient(requestId, { gmail = gmailService, read = readStore, write = writeStore, renderPdf = createScriptLetterPdfBuffer, now = new Date() } = {}) {
+  const store = read();
+  const request = store.scriptRequests.find(item => item.id === requestId);
+  if (!request) {
+    const error = new Error('Prescription request not found');
+    error.statusCode = 404;
+    throw error;
+  }
+  const patient = store.patients.find(item => item.id === request.patientId);
+  if (!patient) {
+    const error = new Error('Patient record not found');
+    error.statusCode = 404;
+    throw error;
+  }
+  const recipient = cleanText(patient.email);
+  if (!validEmail(recipient)) throw new Error('Patient email is missing or invalid. Add it in the patient profile before sending.');
+  const gmailStatus = gmail.status();
+  if (!gmailStatus.connected) throw new Error('Gmail is not connected. Connect the sender account in Settings before emailing prescription requests.');
+  const message = scriptRequestPatientEmail(request);
+  const pdf = await renderPdf(request);
+  const filenameName = letterPatientName(request.patientFullName).replace(/[^a-z0-9]+/ig, '-').replace(/^-|-$/g, '') || 'patient';
+  await gmail.send({
+    to: recipient,
+    ...message,
+    attachments: [{ filename: `prescription-request-${filenameName}.pdf`, contentType: 'application/pdf', content: pdf }]
+  });
+  const sentAt = (now instanceof Date ? now : new Date(now)).toISOString();
+  request.patientEmailSentAt = sentAt;
+  request.patientEmailRecipient = recipient;
+  request.patientEmailSender = cleanText(gmailStatus.emailAddress);
+  request.updatedAt = sentAt;
+  audit(store, 'Emailed prescription request to patient', { requestId: request.id, patient: request.patientFullName, itemCount: request.items?.length || 0 });
+  write(store);
+  return { ok: true, to: recipient, sender: cleanText(gmailStatus.emailAddress), sentAt };
+}
 app.get('/api/letter/:requestId', (req, res) => { const store = readStore(); const r = store.scriptRequests.find(x => x.id === req.params.requestId); if (!r) return res.status(404).send('Request not found'); res.type('html').send(scriptLetterHtml(r)); });
 app.get('/api/letter/:requestId/pdf', (req, res) => {
   const store = readStore();
@@ -1582,6 +1654,13 @@ app.get('/api/letter/:requestId/pdf', (req, res) => {
   const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'portrait' });
   doc.pipe(res);
   writeScriptLetterPdf(doc, r);
+});
+app.post('/api/script-request/:id/email-patient', async (req, res) => {
+  try {
+    res.json(await emailScriptRequestToPatient(req.params.id));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: cleanText(error.message || 'Prescription request email failed') });
+  }
 });
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => console.log(`Webster Pack Pro v2.3.5 running on http://localhost:${PORT}`));
@@ -1598,4 +1677,4 @@ if (process.env.NODE_ENV !== 'test') {
   setInterval(() => processSpecialOrderEmailSchedules().catch(() => {}), 60 * 1000).unref();
 }
 
-export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, applyRepeatOverrides, smartScriptForecast, smartScriptQueue, isS8Medication, specialOrderRecipients, shouldSendSpecialOrderEmail, processSpecialOrderEmailSchedules, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf };
+export { parseDate, dateDisplay, normalizeName, hasHindValue, inferRequestFlag, isActionableScriptItem, computePatient, scriptRowsFast, linkScriptsToMedicationBalances, buildPatientMedicationOverview, applyRepeatOverrides, smartScriptForecast, smartScriptQueue, isS8Medication, specialOrderRecipients, shouldSendSpecialOrderEmail, processSpecialOrderEmailSchedules, lastRepeatOwingDetail, scriptLetterHtml, writeScriptLetterPdf, createScriptLetterPdfBuffer, scriptRequestPatientEmail, emailScriptRequestToPatient };

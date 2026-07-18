@@ -116,6 +116,7 @@ assert.match(officialLetter, /New script needed/);
 assert.doesNotMatch(officialLetter, /MANUAL REVIEW MEDICINE/);
 assert.doesNotMatch(officialLetter, /&nbsp;/);
 assert.match(officialLetter, /Single-copy pharmacy prescription request/);
+assert.match(officialLetter, /Would you also like to email this prescription request to the patient\?/);
 
 const taggedPatientLetter = scriptLetterHtml({ patientFullName:'Masoud Khataminia (RDH)', items:[] });
 assert.match(taggedPatientLetter, /Our client, Masoud Khataminia, receives monthly medication/);
@@ -134,4 +135,6 @@ assert.match(publicApp, /Medications, pill balance & scripts/);
 assert.doesNotMatch(publicApp, /<h3>Imported medication list<\/h3>/);
 assert.match(publicApp, /CLIENT_BUILD_VERSION/);
 assert.match(publicApp, /q\.length < 2/);
+assert.match(publicApp, /Would you also like to email this prescription request to the patient\?/);
+assert.match(publicApp, /\/api\/script-request\/\$\{id\}\/email-patient/);
 console.log('Smoke tests passed.');
