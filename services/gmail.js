@@ -5,18 +5,44 @@ const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 export const validEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(value));
 export const base64Url = value => Buffer.from(value, 'utf8').toString('base64url');
 
-export function buildGmailMime({ to, subject, text, html, from } = {}) {
+const base64Lines = value => Buffer.from(value).toString('base64').match(/.{1,76}/g)?.join('\r\n') || '';
+const attachmentName = value => clean(value || 'attachment').replace(/["\\]/g, '').slice(0, 160) || 'attachment';
+
+export function buildGmailMime({ to, subject, text, html, from, attachments = [] } = {}) {
   if (!validEmail(to)) throw new Error('A valid recipient email is required');
   const body = html || String(text || '');
+  const files = (Array.isArray(attachments) ? attachments : []).filter(file => file?.content !== undefined && file?.content !== null);
+  const boundary = `daa_${crypto.randomBytes(18).toString('hex')}`;
   const headers = [
     ...(from ? [`From: ${clean(from)}`] : []),
     `To: ${clean(to)}`,
     `Subject: ${clean(subject || 'Hibiscus Pharmacy special order reminder')}`,
     'MIME-Version: 1.0',
-    `Content-Type: ${html ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
-    'Content-Transfer-Encoding: 8bit'
+    ...(files.length
+      ? [`Content-Type: multipart/mixed; boundary="${boundary}"`]
+      : [`Content-Type: ${html ? 'text/html' : 'text/plain'}; charset="UTF-8"`, 'Content-Transfer-Encoding: 8bit'])
   ];
-  return `${headers.join('\r\n')}\r\n\r\n${body}`;
+  if (!files.length) return `${headers.join('\r\n')}\r\n\r\n${body}`;
+  const parts = [
+    `--${boundary}`,
+    `Content-Type: ${html ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    body
+  ];
+  for (const file of files) {
+    const filename = attachmentName(file.filename);
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: ${clean(file.contentType || 'application/octet-stream')}; name="${filename}"`,
+      `Content-Disposition: attachment; filename="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      base64Lines(file.content)
+    );
+  }
+  parts.push(`--${boundary}--`, '');
+  return `${headers.join('\r\n')}\r\n\r\n${parts.join('\r\n')}`;
 }
 
 export class GmailService {
@@ -99,9 +125,9 @@ export class GmailService {
 
   profile() { return this.googleRequest('https://gmail.googleapis.com/gmail/v1/users/me/profile'); }
 
-  async send({ to, subject, text, html } = {}) {
+  async send({ to, subject, text, html, attachments } = {}) {
     const tokens = this.readTokens();
-    const raw = base64Url(buildGmailMime({ to, subject, text, html, from: tokens?.emailAddress }));
+    const raw = base64Url(buildGmailMime({ to, subject, text, html, attachments, from: tokens?.emailAddress }));
     return this.googleRequest('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
   }
 

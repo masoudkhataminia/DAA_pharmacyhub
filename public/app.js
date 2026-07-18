@@ -4,7 +4,7 @@ let editPatientId = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
 let SMART_QUEUE = null;
-const CLIENT_BUILD_VERSION = '20260714-smart-script-forecast-v1';
+const CLIENT_BUILD_VERSION = '20260718-patient-request-email-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -282,7 +282,23 @@ async function savePatient(e){
 }
 function renderScriptPage(){
   renderScriptPatientSearch();
-  $('#recentRequests').innerHTML = (STATE.scriptRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th>Status / next action</th><th>Request</th></tr></thead><tbody>${STATE.scriptRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.patientFullName)}</td><td>${r.items.length}</td><td>${badge(r.status,r.status==='Received'?'ok':r.status==='Sent'?'blue':'warn')}<div class="table-actions">${r.status==='Draft'?`<button onclick="setScriptRequestStatus('${r.id}','Sent')">Mark sent</button>`:''}${r.status==='Sent'?`<button onclick="setScriptRequestStatus('${r.id}','Received')">Mark received</button>`:''}${r.status==='Received'?`<button class="ghost" onclick="setScriptRequestStatus('${r.id}','Draft')">Reopen</button>`:''}</div></td><td><a class="linkbtn" href="/api/letter/${r.id}/pdf" target="_blank">Last Repeat / Owing PDF</a> <a class="linkbtn" href="/api/letter/${r.id}" target="_blank">Preview</a> <button class="danger-action" onclick="deleteScriptRequest('${r.id}','${esc(r.patientFullName)}')">Delete</button></td></tr>`).join('')}</tbody></table>` : empty('No script requests created yet.');
+  $('#recentRequests').innerHTML = (STATE.scriptRequests||[]).length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th>Status / next action</th><th>Request</th></tr></thead><tbody>${STATE.scriptRequests.slice(0,80).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.patientFullName)}</td><td>${r.items.length}</td><td>${badge(r.status,r.status==='Received'?'ok':r.status==='Sent'?'blue':'warn')}<div class="table-actions">${r.status==='Draft'?`<button onclick="setScriptRequestStatus('${r.id}','Sent')">Mark sent</button>`:''}${r.status==='Sent'?`<button onclick="setScriptRequestStatus('${r.id}','Received')">Mark received</button>`:''}${r.status==='Received'?`<button class="ghost" onclick="setScriptRequestStatus('${r.id}','Draft')">Reopen</button>`:''}</div></td><td><button class="linkbtn" onclick="printScriptRequest('${r.id}')">Print / email PDF</button> <a class="linkbtn" href="/api/letter/${r.id}" target="_blank">Preview</a> <button class="danger-action" onclick="deleteScriptRequest('${r.id}','${esc(r.patientFullName)}')">Delete</button></td></tr>`).join('')}</tbody></table>` : empty('No script requests created yet.');
+}
+const PATIENT_EMAIL_CONFIRMATION = 'Would you also like to email this prescription request to the patient?';
+async function sendScriptRequestToPatient(id){
+  return api(`/api/script-request/${id}/email-patient`, { method:'POST' });
+}
+async function printScriptRequest(id){
+  const shouldEmail = window.confirm(PATIENT_EMAIL_CONFIRMATION);
+  const pdfWindow = window.open(`/api/letter/${id}/pdf`, '_blank');
+  if (!pdfWindow) toast('Your browser blocked the PDF window. Allow pop-ups and try again.');
+  if (!shouldEmail) return;
+  try {
+    const result = await sendScriptRequestToPatient(id);
+    toast(`PDF opened and emailed to ${result.to} from ${result.sender || 'the connected Gmail account'}.`);
+  } catch (error) {
+    toast(`PDF opened, but the email was not sent: ${error.message}`);
+  }
 }
 async function setScriptRequestStatus(id,status){await api(`/api/script-request/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(`Request marked ${status}.`);await loadState();showView('scripts');}
 async function deleteScriptRequest(id,patientName){
@@ -472,8 +488,28 @@ async function createScriptRequest(){
   const items = JSON.parse($('#requestBuilder').dataset.items||'[]');
   const selected=items.filter(item=>item.selected).map(item=>({ prescriptionId:item.prescriptionId, medicineName:item.medicineName, directions:item.directions||'', repeatsLeft:item.repeatsLeft??'', owingCount:item.owingCount??'', status:/^OK$/i.test(item.status||'')?'Manual request':item.status, scriptNumber:item.scriptNumber||'', lastDispenseDate:item.lastDispenseDate||'', lastDispenseQty:item.lastDispenseQty??'', owing:!!item.owing }));
   if(!selected.length) return toast('No actionable medicine selected. OK / sufficient-repeat medicines are not added to the GP letter.');
-  const doctor=$('#requestDoctor'); const r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
-  toast('Last Repeat / Owing PDF created.'); window.open(`/api/letter/${r.id}/pdf`,'_blank'); await loadState(); showView('scripts');
+  const shouldEmail = window.confirm(PATIENT_EMAIL_CONFIRMATION);
+  const pdfWindow = window.open('', '_blank');
+  const doctor=$('#requestDoctor');
+  let r;
+  try {
+    r = await api('/api/script-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientId:selectedPatientId,items:selected,note:$('#requestNote').value,doctorId:doctor?.value||'',recipient:doctor?.selectedOptions?.[0]?.textContent||'GP / Prescriber'})});
+  } catch (error) {
+    if (pdfWindow) pdfWindow.close();
+    throw error;
+  }
+  const pdfUrl = `/api/letter/${r.id}/pdf`;
+  if (pdfWindow) pdfWindow.location.replace(pdfUrl); else window.open(pdfUrl, '_blank');
+  let message = 'Last Repeat / Owing PDF created.';
+  if (shouldEmail) {
+    try {
+      const result = await sendScriptRequestToPatient(r.id);
+      message = `PDF created and emailed to ${result.to} from ${result.sender || 'the connected Gmail account'}.`;
+    } catch (error) {
+      message = `PDF created, but the email was not sent: ${error.message}`;
+    }
+  }
+  toast(message); await loadState(); showView('scripts');
 }
 
 function specialBadge(o){
@@ -683,7 +719,7 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 $('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailDisconnect').addEventListener('click',gmailDisconnect);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
-window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.setScriptRequestStatus=setScriptRequestStatus; window.deleteScriptRequest=deleteScriptRequest; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis;
+window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.deleteScriptRequest=deleteScriptRequest; window.printScriptRequest=printScriptRequest; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis;
 window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient;
 window.addEventListener('focus', checkForAppUpdate);
 document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
