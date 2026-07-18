@@ -117,6 +117,10 @@ assert.doesNotMatch(officialLetter, /MANUAL REVIEW MEDICINE/);
 assert.doesNotMatch(officialLetter, /&nbsp;/);
 assert.match(officialLetter, /Single-copy pharmacy prescription request/);
 
+const taggedPatientLetter = scriptLetterHtml({ patientFullName:'Masoud Khataminia (RDH)', items:[] });
+assert.match(taggedPatientLetter, /Our client, Masoud Khataminia, receives monthly medication/);
+assert.doesNotMatch(taggedPatientLetter, /\(RDH\)/);
+
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
 assert.match(publicApp, /const noScript = m\.newScriptNeeded === true/);
