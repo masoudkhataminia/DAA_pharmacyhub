@@ -4,7 +4,10 @@ let editPatientId = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
 let SMART_QUEUE = null;
-const CLIENT_BUILD_VERSION = '20260719-professional-polish-preview-v3';
+let selectedSmartPatientId = null;
+let SMART_PATIENT_DETAILS = null;
+let SMART_AI_STATUS = { configured:false };
+const CLIENT_BUILD_VERSION = '20260719-smart-patient-profile-preview-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -402,22 +405,125 @@ async function buildRequestForPatient(id){
 function smartValue(value, suffix=''){
   return value === null || value === undefined || value === '' ? '—' : `${Number.isFinite(Number(value)) ? Math.round(Number(value) * 10) / 10 : value}${suffix}`;
 }
+function renderSmartPatientSearch(){
+  const q = ($('#smartPatientSearch')?.value || '').toLowerCase().trim();
+  const patients = patientPool().filter(patient => patient.active !== false);
+  if (q.length < 2) {
+    $('#smartPatientResults').innerHTML = empty(selectedSmartPatientId ? 'Selected patient is shown below. Type 2 or more letters to choose another patient.' : 'Type at least 2 letters to find a patient.');
+    return;
+  }
+  const results = patients.filter(patient => `${patient.fullName} ${patient.phone||''} ${patient.patientGroup||''} ${patient.room||''} ${patient.facilityWard||''} ${patient.externalId||''} ${patient.dispenseCode||''} ${patient.mypakPatientId||''} ${patient.mpsPatientId||''}`.toLowerCase().includes(q)).slice(0, 20);
+  $('#smartPatientResults').innerHTML = results.length ? results.map(patient => {
+    const stream = patient.packingStream || (patient.mpsPatientId ? 'Sachet' : 'WP');
+    return `<div class="queue-card smart-search-result ${patient.id===selectedSmartPatientId?'selected-card':''}"><div><h3>${esc(patient.fullName)}</h3><p>${esc(stream)}${patient.patientGroup?` · ${esc(patient.patientGroup)}`:''}${patient.room?` · Room ${esc(patient.room)}`:''}${patient.facilityWard?` · ${esc(patient.facilityWard)}`:''}</p><div class="badges">${badge(stream,stream==='Sachet'?'blue':'mint')} ${patient.mypakPatientId?badge('MyPak','mint'):''} ${patient.mpsPatientId?badge('MPS','blue'):''}</div></div><button class="ghost" type="button" onclick="selectSmartPatient('${patient.id}')">${patient.id===selectedSmartPatientId?'Selected':'Select'}</button></div>`;
+  }).join('') : empty('No patient found. Check spelling or import/sync the patient list first.');
+}
+function smartMedicationProfile(rows=[]){
+  const scriptState = item => item.owing ? badge('Owing','danger') : item.requestFlag==='New script required' ? badge('New script required','warn') : item.requestFlag==='Low repeats' ? badge('Low repeats','warn') : item.requestFlag==='OK' ? badge('OK','ok') : '—';
+  return rows.length ? `<div class="table-wrap"><table><thead><tr><th>Medication</th><th>Directions</th><th>Balance</th><th>Required / week</th><th>Repeats</th><th>Status</th><th>Script / source</th></tr></thead><tbody>${rows.map(item=>`<tr><td><b>${esc(item.medication||item.drugDescription||item.medicineName||'—')}</b></td><td>${esc(item.direction||'—')}</td><td>${esc(patientValue(item.balanceQty))}</td><td>${esc(patientValue(item.weeklyQty))}</td><td><b>${esc(patientValue(item.repeatsLeft))}</b><br><small>${esc(item.repeatSource||'No repeat source')}</small></td><td>${scriptState(item)}</td><td>${esc(item.scriptNumber||'—')}<br><small>${esc(item.overviewSource||item.repeatSource||'Medication list')}</small></td></tr>`).join('')}</tbody></table></div>` : empty('No medication, balance or script information is available for this patient.');
+}
+function smartHistoryDate(value){
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('en-AU');
+}
+function smartMedicationHistory(details){
+  const dispense = [...(details.dispenseHistory||[])].sort((a,b)=>String(b.dateDispensed||b.createdAt||'').localeCompare(String(a.dateDispensed||a.createdAt||''))).slice(0,150);
+  const requests = [...(details.scriptRequests||[])].sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||''))).slice(0,50);
+  const dispenseTable = dispense.length ? `<div class="table-wrap"><table><thead><tr><th>Date dispensed</th><th>Medication</th><th>Quantity</th><th>Script</th><th>Status</th></tr></thead><tbody>${dispense.map(item=>`<tr><td>${esc(smartHistoryDate(item.dateDispensed||item.createdAt))}</td><td><b>${esc(item.drugName||item.medicationName||item.medication||'—')}</b><br><small>${esc(item.direction||'')}</small></td><td>${esc(patientValue(item.quantity??item.manuallyQuantity))}</td><td>${esc(item.scriptNumber||item.calculatedScriptNumber||'—')}</td><td>${esc(item.dispenseStatus||item.scriptStatus||'—')}</td></tr>`).join('')}</tbody></table></div>` : empty('No MyPak dispense history is saved for this patient yet.');
+  const requestTable = requests.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Medicines requested</th><th>Status</th></tr></thead><tbody>${requests.map(request=>`<tr><td>${esc(smartHistoryDate(request.createdAt||request.date))}</td><td>${esc((request.items||[]).map(item=>item.medicineName||item.medication).filter(Boolean).join(', ')||'—')}</td><td>${esc(request.status||'Draft')}</td></tr>`).join('')}</tbody></table></div>` : empty('No previous prescription requests are saved for this patient.');
+  const hasMpsHistory = (details.mpsPackedDays||[]).length || (details.mpsPackedPrn||[]).length || (details.mpsOrders||[]).length;
+  return `<div class="smart-history-grid"><section><h4>MyPak dispense history</h4>${dispenseTable}</section><section><h4>Prescription request history</h4>${requestTable}</section></div>${hasMpsHistory?`<details class="smart-mps-history" open><summary>MPS packing and medication history</summary>${mpsMedicationSummary(details)}</details>`:''}`;
+}
+function updateSmartAiButton(){
+  const button = $('#smartAiReviewBtn');
+  if (button) button.disabled = !SMART_AI_STATUS.configured || !selectedSmartPatientId;
+}
+function renderSmartPatientSnapshot(details){
+  SMART_PATIENT_DETAILS = details;
+  const patient = details.patient;
+  const stream = patient.packingStream || (patient.mpsPatientId ? 'Sachet' : 'WP');
+  $('#smartPatientSnapshot').className = 'smart-patient-snapshot';
+  $('#smartPatientSnapshot').innerHTML = `<article class="smart-profile-card"><div class="smart-profile-head"><div><h3>${esc(patient.fullName)}</h3><p>${esc(stream)}${patient.patientGroup?` · ${esc(patient.patientGroup)}`:''}${patient.room?` · Room ${esc(patient.room)}`:''}${patient.facilityWard?` · ${esc(patient.facilityWard)}`:''}</p><div class="badges">${badge(stream,stream==='Sachet'?'blue':'mint')} ${patient.mypakPatientId?badge('MyPak profile','mint'):''} ${patient.mpsPatientId?badge('MPS profile','blue'):''}</div></div><div class="card-actions"><button id="smartAiReviewBtn" type="button" onclick="runSmartAiReview()">AI review summary</button><button class="ghost" type="button" onclick="openPatient('${patient.id}')">Full patient profile</button></div></div><details open><summary>Medication profile</summary>${smartMedicationProfile(details.medicationOverview||details.medicationBalances||[])}</details><details open><summary>Medication and request history</summary>${smartMedicationHistory(details)}</details></article>`;
+  updateSmartAiButton();
+}
+async function selectSmartPatient(patientId){
+  selectedSmartPatientId = patientId;
+  $('#smartPatientSnapshot').className = 'smart-patient-snapshot empty';
+  $('#smartPatientSnapshot').textContent = 'Loading medication profile and history…';
+  $('#smartAiReview').classList.add('hidden');
+  try {
+    const details = await api(`/api/patients/${patientId}/details`);
+    $('#smartPatientSearch').value = details.patient.fullName;
+    renderSmartPatientSearch();
+    renderSmartPatientSnapshot(details);
+    await runSmartScriptForecast();
+  } catch (error) {
+    $('#smartPatientSnapshot').textContent = error.message;
+    toast(error.message);
+  }
+}
+async function clearSmartPatientSearch(){
+  selectedSmartPatientId = null;
+  SMART_PATIENT_DETAILS = null;
+  $('#smartPatientSearch').value = '';
+  $('#smartPatientSnapshot').className = 'smart-patient-snapshot empty';
+  $('#smartPatientSnapshot').textContent = 'Search and select a patient to show their medication profile and history.';
+  $('#smartAiReview').classList.add('hidden');
+  renderSmartPatientSearch();
+  await runSmartScriptForecast();
+}
+function smartForecastOptions(){
+  const data = new FormData($('#smartScriptForm'));
+  return {
+    packWeeks:data.get('packWeeks'), horizonMonths:data.get('horizonMonths'), safetyDays:data.get('safetyDays'),
+    includeOwing:data.has('includeOwing')?'1':'0', requireVerified:data.has('requireVerified')?'1':'0', includeIncomplete:data.has('includeIncomplete')?'1':'0',
+    ...(selectedSmartPatientId ? { patientId:selectedSmartPatientId } : {})
+  };
+}
+async function refreshSmartAiStatus(){
+  try {
+    SMART_AI_STATUS = await api('/api/smart-script/ai-status');
+    const label = $('#smartAiStatus');
+    label.textContent = SMART_AI_STATUS.configured ? `AI review ready · ${SMART_AI_STATUS.model}` : 'AI review not connected · forecast still available';
+    label.className = SMART_AI_STATUS.configured ? 'ai-ready' : 'ai-offline';
+  } catch (error) {
+    SMART_AI_STATUS = { configured:false };
+    $('#smartAiStatus').textContent = 'AI review status unavailable';
+    $('#smartAiStatus').className = 'ai-offline';
+  }
+  updateSmartAiButton();
+}
+function smartAiList(title, items=[]){
+  return items.length ? `<div><h4>${esc(title)}</h4><ul>${items.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>` : '';
+}
+async function runSmartAiReview(){
+  if (!selectedSmartPatientId) return toast('Select a patient first.');
+  if (!SMART_AI_STATUS.configured) return toast('AI review is not connected on the server. The deterministic forecast still works.');
+  const button = $('#smartAiReviewBtn');
+  button.disabled = true; button.textContent = 'Preparing AI review…';
+  try {
+    const result = await api('/api/smart-script/ai-review', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(smartForecastOptions()) });
+    const box = $('#smartAiReview');
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="smart-ai-head"><div><span>AI summary · pharmacist review required</span><h3>${esc(result.summary)}</h3></div>${badge('Advisory only','warn')}</div><p>${esc(result.priorityExplanation)}</p><div class="smart-ai-grid">${smartAiList('Data-quality issues',result.dataQualityIssues)}${smartAiList('Pharmacist checks',result.pharmacistChecks)}${smartAiList('Warnings',result.warnings)}</div>`;
+    box.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  } catch (error) { toast(error.message); }
+  finally { button.textContent = 'AI review summary'; updateSmartAiButton(); }
+}
 function renderSmartScriptResult(result){
   SMART_QUEUE = result;
   const assumptions = result.assumptions || {};
   const summary = result.summary || {};
-  $('#smartSummary').innerHTML = `<b>${esc(summary.patientCount||0)}</b> patients · <b>${esc(summary.medicineCount||0)}</b> medicines ready for review · <b>${esc(summary.reviewCount||0)}</b> data issues<br><small>${esc(assumptions.packWeeks)}-week pack run · ${esc(assumptions.horizonMonths)} pack run(s) forecast · ${esc(assumptions.safetyDays)}-day safety buffer${assumptions.requireVerified?' · verified repeats only':''}</small>`;
+  const scope = assumptions.selectedPatientId && SMART_PATIENT_DETAILS?.patient ? `<b>${esc(SMART_PATIENT_DETAILS.patient.fullName)}</b> · selected patient` : `<b>${esc(summary.patientCount||0)}</b> patients`;
+  $('#smartSummary').innerHTML = `${scope} · <b>${esc(summary.medicineCount||0)}</b> medicines ready for review · <b>${esc(summary.reviewCount||0)}</b> data issues<br><small>${esc(assumptions.packWeeks)}-week pack run · ${esc(assumptions.horizonMonths)} pack run(s) forecast · ${esc(assumptions.safetyDays)}-day safety buffer${assumptions.requireVerified?' · verified repeats only':''}</small>`;
   $('#smartScriptQueue').innerHTML = (result.patients||[]).length ? result.patients.map(patient=>`<article class="smart-patient-card"><div class="smart-patient-head"><div><h3>${esc(patient.patientFullName)}</h3><p>${esc(patient.patientGroup||'No patient group')} · earliest predicted need ${esc(patient.earliestNeededBy||'—')}</p></div><div class="card-actions"><button class="ghost" onclick="openPatient('${patient.patientId}')">Open profile</button><button onclick="buildSmartRequestForPatient('${patient.patientId}')">Review request</button></div></div><div class="smart-medicine-list">${patient.medicines.map(item=>`<div class="smart-medicine"><div><b>${esc(item.medication)}</b><div class="badges">${badge(item.requestUrgency,item.owing?'danger':'warn')} ${item.owing?badge('Owing','danger'):''} ${badge(item.repeatConfidence,item.verifiedRepeat?'ok':'warn')}</div></div><div class="smart-metrics"><span>Balance <b>${esc(smartValue(item.balanceQty))}</b></span><span>Use/week <b>${esc(smartValue(item.weeklyQty))}</b></span><span>Current pack needs <b>${esc(smartValue(item.currentPackRequired))}</b></span><span>Repeats <b>${esc(smartValue(item.repeatsLeft))}</b></span><span>Total cover <b>${esc(smartValue(item.totalCoverageDays,' days'))}</b></span><span>Shortfall <b>${esc(smartValue(item.shortfallQty))}</b></span></div><p class="smart-calculation">Available ${esc(smartValue(item.projectedUnitsAvailable))} units vs estimated ${esc(smartValue(item.projectedConsumption))} units through the selected horizon + buffer. Predicted prescription need: <b>${esc(item.neededByDisplay||item.neededByDate||'—')}</b>.</p></div>`).join('')}</div></article>`).join('') : empty('No verified medicines need a script within this forecast. Check the data-review list below, or widen the options.');
   const reviews = result.reviewItems || [];
   $('#smartReviewQueue').innerHTML = reviews.length ? `<table><thead><tr><th>Patient</th><th>Medicine</th><th>Problem</th><th>Repeat source</th><th></th></tr></thead><tbody>${reviews.map(item=>`<tr><td><b>${esc(item.patientFullName)}</b></td><td>${esc(item.medication||'—')}</td><td>${esc(item.dataIssue || (item.repeatZeroNeedsCheck?'Unverified zero repeat':'Repeat needs verification'))}</td><td>${esc(item.repeatConfidence||item.source||'—')}</td><td><button class="ghost" onclick="openPatient('${item.patientId}')">Check / edit</button></td></tr>`).join('')}</tbody></table>` : empty('No repeat or balance data issues in this forecast.');
 }
 async function runSmartScriptForecast(event){
   event?.preventDefault();
-  const data = new FormData($('#smartScriptForm'));
-  const params = new URLSearchParams({
-    packWeeks:data.get('packWeeks'), horizonMonths:data.get('horizonMonths'), safetyDays:data.get('safetyDays'),
-    includeOwing:data.has('includeOwing')?'1':'0', requireVerified:data.has('requireVerified')?'1':'0', includeIncomplete:data.has('includeIncomplete')?'1':'0'
-  });
+  const params = new URLSearchParams(smartForecastOptions());
   $('#smartSummary').textContent = 'Analysing current balances, consumption and repeats…';
   renderSmartScriptResult(await api(`/api/smart-script-queue?${params}`));
 }
@@ -715,7 +821,7 @@ async function importForm(e){
 }
 async function doctorSubmit(e){ e.preventDefault(); const body=Object.fromEntries(new FormData(e.currentTarget).entries()); await api('/api/doctor-updates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); toast('Doctor update added as pending review.'); await loadState(); showView('doctor'); }
 async function settingsSubmit(e){ e.preventDefault(); const body=Object.fromEntries(new FormData(e.currentTarget).entries()); Object.keys(body).forEach(k=>body[k]=Number(body[k])); await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); toast('Settings saved.'); await loadState(); showView('settings'); }
-function renderAll(){ renderDashboard(); renderImportReview(); renderPatients(); renderScriptPage(); renderSpecialOrders(); renderDoctor(); renderSettings(); }
+function renderAll(){ renderDashboard(); renderImportReview(); renderPatients(); renderScriptPage(); renderSmartPatientSearch(); renderSpecialOrders(); renderDoctor(); renderSettings(); }
 async function loadState(){ STATE = await api('/api/state'); renderAll(); }
 
 $$('.nav').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
@@ -734,6 +840,7 @@ $$('form.upload-card').forEach(f=>f.addEventListener('submit',importForm));
 $$('form.quick-report-upload').forEach(f=>f.addEventListener('submit',importForm));
 $('#patientSearch').addEventListener('input',renderPatients); $('#patientFilter').addEventListener('change',renderPatients);
 $('#scriptPatientSearch').addEventListener('input',renderScriptPatientSearch); $('#clearScriptSearch').addEventListener('click',()=>{ $('#scriptPatientSearch').value=''; renderScriptPatientSearch(); });
+$('#smartPatientSearch').addEventListener('input',renderSmartPatientSearch); $('#clearSmartPatientSearch').addEventListener('click',clearSmartPatientSearch);
 $('#smartScriptForm').addEventListener('submit',runSmartScriptForecast);
 $('#savePatientBtn').addEventListener('click',savePatient);
 $('#doctorForm').addEventListener('submit',doctorSubmit);
@@ -745,9 +852,9 @@ $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 $('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailDisconnect').addEventListener('click',gmailDisconnect);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.deleteScriptRequest=deleteScriptRequest; window.printScriptRequest=printScriptRequest; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis;
-window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient;
+window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient; window.selectSmartPatient=selectSmartPatient; window.runSmartAiReview=runSmartAiReview;
 window.addEventListener('focus', checkForAppUpdate);
 document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
 setInterval(checkForAppUpdate, 60000);
 checkForAppUpdate();
-loadState().then(async()=>{if(new URLSearchParams(location.search).has('gmail')){showView('settings');toast(new URLSearchParams(location.search).get('gmail')==='connected'?'Gmail connected successfully.':'Gmail connection was not approved.');}await Promise.all([refreshMyPakStatus(),refreshMpsStatus()]);await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));
+loadState().then(async()=>{if(new URLSearchParams(location.search).has('gmail')){showView('settings');toast(new URLSearchParams(location.search).get('gmail')==='connected'?'Gmail connected successfully.':'Gmail connection was not approved.');}await Promise.all([refreshMyPakStatus(),refreshMpsStatus(),refreshSmartAiStatus()]);await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));

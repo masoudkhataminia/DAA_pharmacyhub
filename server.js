@@ -12,6 +12,7 @@ import { publicMyPakError } from './services/mypak/errors.js';
 import { normalizeMyPakMedicationBalance } from './services/mypak/mapper.js';
 import { mergePackJobs, normalizePackDose, packRows, patientPackJobs } from './services/mypak/packs.js';
 import { analyseDoctorChange, doctorChangeAiStatus } from './services/doctor-change/analysis.js';
+import { analyseSmartScriptReview, smartScriptAiStatus } from './services/smart-script/analysis.js';
 import { buildPackImpact } from './services/doctor-change/impact.js';
 import { MpsClient } from './services/mps/client.js';
 import { MpsSyncService } from './services/mps/sync.js';
@@ -24,7 +25,7 @@ const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-token.enc');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260719-professional-polish-preview-v3';
+const APP_BUILD_VERSION = '20260719-smart-patient-profile-preview-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -618,7 +619,8 @@ function smartScriptQueue(store, options = {}) {
   const includeIncomplete = String(options.includeIncomplete ?? '0') === '1' || options.includeIncomplete === true;
   const patients = [];
   const reviewItems = [];
-  for (const patient of (store.patients || []).filter(row => row.active !== false)) {
+  const selectedPatientId = cleanText(options.patientId);
+  for (const patient of (store.patients || []).filter(row => row.active !== false && (!selectedPatientId || String(row.id) === selectedPatientId))) {
     const patientKey = normalizeName(patient.fullName);
     const balances = (store.mypakMedicationBalances || []).filter(row => String(row.patientId) === String(patient.mypakPatientId)).map(normalizeMyPakMedicationBalance);
     const scripts = (store.scripts || []).filter(row => row.patientNameKey === patientKey);
@@ -632,7 +634,7 @@ function smartScriptQueue(store, options = {}) {
     patients.push({ patientId:patient.id, patientFullName:patient.fullName, patientGroup:patient.patientGroup || '', packType:patient.packType || '', medicines:due.sort((a,b)=>a.totalCoverageDays-b.totalCoverageDays), earliestNeededBy:due.map(item=>item.neededByDate).sort()[0], riskScore:due.reduce((score,item)=>score+(item.owing?5:item.totalCoverageDays<=item.horizonDays?3:1),0) });
   }
   patients.sort((a,b)=>b.riskScore-a.riskScore || a.earliestNeededBy.localeCompare(b.earliestNeededBy) || a.patientFullName.localeCompare(b.patientFullName));
-  return { patients, reviewItems, summary:{ patientCount:patients.length, medicineCount:patients.reduce((sum,p)=>sum+p.medicines.length,0), reviewCount:reviewItems.length }, assumptions:{ packWeeks:Math.min(8,Math.max(1,num(options.packWeeks,4))), horizonMonths:Math.min(6,Math.max(1,num(options.horizonMonths,2))), safetyDays:Math.min(28,Math.max(0,num(options.safetyDays,7))), requireVerified, includeOwing, includeIncomplete } };
+  return { patients, reviewItems, summary:{ patientCount:patients.length, medicineCount:patients.reduce((sum,p)=>sum+p.medicines.length,0), reviewCount:reviewItems.length }, assumptions:{ packWeeks:Math.min(8,Math.max(1,num(options.packWeeks,4))), horizonMonths:Math.min(6,Math.max(1,num(options.horizonMonths,2))), safetyDays:Math.min(28,Math.max(0,num(options.safetyDays,7))), requireVerified, includeOwing, includeIncomplete, selectedPatientId } };
 }
 
 function headerMapFromRow(headerRow) {
@@ -1321,6 +1323,20 @@ app.patch('/api/patients/:id/repeat-override', (req, res) => {
   writeStore(store); res.json({ ok:true, override:store.repeatOverrides[key] || null });
 });
 app.get('/api/smart-script-queue', (req, res) => res.json(smartScriptQueue(readStore(), req.query)));
+app.get('/api/smart-script/ai-status', (_, res) => res.json(smartScriptAiStatus()));
+app.post('/api/smart-script/ai-review', async (req, res) => {
+  try {
+    const store = readStore();
+    const patientId = cleanText(req.body?.patientId);
+    const patient = store.patients.find(item => item.id === patientId && item.active !== false);
+    if (!patient) return res.status(404).json({ error: 'Select an active patient first.' });
+    const forecast = smartScriptQueue(store, { ...req.body, patientId, includeIncomplete: '1' });
+    const review = await analyseSmartScriptReview({ forecast });
+    audit(store, 'AI reviewed Smart Script forecast', { patientId: patient.id, medicineCount: forecast.summary.medicineCount, dataIssueCount: forecast.summary.reviewCount });
+    writeStore(store);
+    res.json({ ...review, patientId: patient.id, generatedAt: nowISO() });
+  } catch (error) { res.status(error.status || 500).json({ error: error.message || 'Smart Script AI review failed' }); }
+});
 app.get('/api/patients/:id/details', (req, res) => {
   const store = readStore();
   const p = store.patients.find(x => x.id === req.params.id);

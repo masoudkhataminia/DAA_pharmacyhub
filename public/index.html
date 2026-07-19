@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260719-professional-polish-preview-v3" />
+  <link rel="stylesheet" href="/styles.css?v=20260719-smart-patient-profile-preview-v1" />
 </head>
 <body>
   <aside class="sidebar">
@@ -110,6 +110,16 @@
     </section>
 
     <section id="smart" class="view">
+      <section class="panel smart-patient-lookup">
+        <div class="panel-head"><div><h2>Select patient</h2><p class="muted">Search the saved MyPak/MPS patient list, then review the medication profile and history before forecasting.</p></div><span id="smartAiStatus">Checking AI review…</span></div>
+        <div class="smart-search-row">
+          <label class="field"><span>Patient search</span><input id="smartPatientSearch" placeholder="Search name, room, facility, MyPak or MPS ID…" autocomplete="off"></label>
+          <button id="clearSmartPatientSearch" class="ghost" type="button">Clear / all patients</button>
+        </div>
+        <div id="smartPatientResults" class="queue smart-patient-results"></div>
+        <div id="smartPatientSnapshot" class="smart-patient-snapshot empty">Search and select a patient to show their medication profile and history.</div>
+        <div id="smartAiReview" class="smart-ai-review hidden"></div>
+      </section>
       <section class="panel smart-script-panel">
         <div class="panel-head"><div><h2>Smart Script Request</h2><p class="muted">Forecasts when each medicine will run out using current tablet balance, weekly consumption, pack batch size and repeats remaining.</p></div><span>Decision support only · every medicine shows its calculation</span></div>
         <form id="smartScriptForm" class="smart-controls">
@@ -169,6 +179,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260719-professional-polish-preview-v3"></script>
+	  <script src="/app.js?v=20260719-smart-patient-profile-preview-v1"></script>
 </body>
 </html>
