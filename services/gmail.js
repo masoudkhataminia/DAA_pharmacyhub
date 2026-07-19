@@ -60,7 +60,16 @@ export class GmailService {
   authorizationUrl(state) {
     if (!this.configured()) throw new Error('Gmail OAuth is not configured on the server');
     const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-    url.search = new URLSearchParams({ client_id: this.clientId, redirect_uri: this.redirectUri, response_type: 'code', scope: 'https://www.googleapis.com/auth/gmail.send', access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state }).toString();
+    url.search = new URLSearchParams({
+      client_id: this.clientId,
+      redirect_uri: this.redirectUri,
+      response_type: 'code',
+      scope: 'openid email https://www.googleapis.com/auth/gmail.send',
+      access_type: 'offline',
+      prompt: 'select_account consent',
+      include_granted_scopes: 'true',
+      state
+    }).toString();
     return url.toString();
   }
 
@@ -97,12 +106,20 @@ export class GmailService {
   async exchangeCode(code) {
     const data = await this.tokenRequest({ code, client_id: this.clientId, client_secret: this.clientSecret, redirect_uri: this.redirectUri, grant_type: 'authorization_code' });
     if (!data.refresh_token) throw new Error('Google did not return an offline refresh token. Reconnect and approve access again.');
-    const tokens = { accessToken: data.access_token, refreshToken: data.refresh_token, expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000, emailAddress: '' };
-    this.writeTokens(tokens);
-    const profile = await this.profile();
-    tokens.emailAddress = clean(profile.emailAddress);
+    if (!data.access_token) throw new Error('Google did not return an access token. Please reconnect.');
+    const profile = await this.accountProfile(data.access_token);
+    const emailAddress = clean(profile.email || profile.emailAddress);
+    if (!validEmail(emailAddress)) throw new Error('Google account email could not be verified. Please choose another account.');
+    const tokens = { accessToken: data.access_token, refreshToken: data.refresh_token, expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000, emailAddress };
     this.writeTokens(tokens);
     return tokens;
+  }
+
+  async accountProfile(accessToken) {
+    const response = await this.fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(clean(data.error_description || data.error || 'Google account profile request failed'));
+    return data;
   }
 
   async accessToken() {
@@ -122,8 +139,6 @@ export class GmailService {
     if (!response.ok) throw new Error(clean(data.error?.message || data.error || 'Gmail API request failed'));
     return data;
   }
-
-  profile() { return this.googleRequest('https://gmail.googleapis.com/gmail/v1/users/me/profile'); }
 
   async send({ to, subject, text, html, attachments } = {}) {
     const tokens = this.readTokens();

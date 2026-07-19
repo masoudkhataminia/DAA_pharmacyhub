@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260718-patient-request-email-v1" />
+  <link rel="stylesheet" href="/styles.css?v=20260719-gmail-account-switch-v1" />
 </head>
 <body>
   <aside class="sidebar">
@@ -153,7 +153,7 @@
 
     <section id="settings" class="view">
       <section class="panel" id="mypakPanelSettings"><div class="panel-head"><h2>Data & MyPak sync</h2><span>Read-only MyPak connection</span></div><div class="toolbar"><button id="mypakSyncBtnSettings" type="button">Sync now</button><span>Live sync on page open and Refresh; automatic sync every 15 minutes, 08:00–18:00.</span></div><div class="three-col settings-imports"><form class="upload-card" data-import="patients"><h3>Patients</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="upload-card" data-import="medications"><h3>Medications</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="upload-card" data-import="scripts"><h3>Scripts</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></section>
-      <section class="panel gmail-panel"><div class="panel-head"><div><h2>Gmail sender</h2><p class="muted">Connect the pharmacy Gmail once. It sends confirmed patient prescription requests and scheduled S8 / Special Order emails.</p></div><span id="gmailStatus">Checking Gmail…</span></div><form id="emailSettingsForm" class="gmail-settings-row"><label class="field"><span>Pharmacy recipient email</span><input id="pharmacyEmail" name="pharmacyEmail" type="email" placeholder="pharmacy@example.com"></label><button type="submit">Save email</button><a id="gmailConnect" class="ghost" href="/api/gmail/connect">Connect Gmail</a><button id="gmailTest" type="button" class="ghost">Send test</button><button id="gmailRunNow" type="button" class="ghost">Run due emails now</button><button id="gmailDisconnect" type="button" class="danger-action">Disconnect</button></form><p id="gmailSetupHelp" class="secret-note"></p><div id="specialEmailLog" class="table-wrap"></div></section>
+      <section class="panel gmail-panel"><div class="panel-head"><div><h2>Gmail sender</h2><p class="muted">Connect any approved Google account now, then change it to the pharmacy account later. The sender account and pharmacy recipient email can be different.</p></div><span id="gmailStatus">Checking Gmail…</span></div><form id="emailSettingsForm" class="gmail-settings-row"><label class="field"><span>Pharmacy recipient email</span><input id="pharmacyEmail" name="pharmacyEmail" type="email" placeholder="pharmacy@example.com"></label><button type="submit">Save email</button><a id="gmailConnect" class="ghost" href="/api/gmail/connect">Connect Google account</a><button id="gmailTest" type="button" class="ghost">Send test</button><button id="gmailRunNow" type="button" class="ghost">Run due emails now</button><button id="gmailDisconnect" type="button" class="danger-action">Disconnect</button></form><p id="gmailSetupHelp" class="secret-note"></p><div id="specialEmailLog" class="table-wrap"></div></section>
       <section class="panel"><div class="panel-head"><h2>Workflow settings</h2><span>default lead days and alert windows</span></div><form id="settingsForm" class="settings-grid"></form></section>
       <section class="panel"><div class="panel-head"><h2>Audit trail</h2><span>who/what/when style log</span></div><div id="auditLog" class="table-wrap"></div></section>
     </section>
@@ -161,6 +161,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260718-patient-request-email-v1"></script>
+  <script src="/app.js?v=20260719-gmail-account-switch-v1"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@ let editPatientId = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
 let SMART_QUEUE = null;
-const CLIENT_BUILD_VERSION = '20260718-patient-request-email-v1';
+const CLIENT_BUILD_VERSION = '20260719-gmail-account-switch-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -656,7 +656,7 @@ function renderSettings(){
   refreshGmailStatus();
 }
 async function refreshGmailStatus(){
-  try{const status=await api('/api/gmail/status');const label=$('#gmailStatus');const connect=$('#gmailConnect');label.textContent=status.connected?`Connected · ${status.emailAddress||'Gmail sender'}`:status.configured?'Ready to connect Gmail':'Google OAuth server credentials required';label.className=status.connected?'gmail-connected':'gmail-not-connected';connect.style.pointerEvents=status.configured?'':'none';connect.style.opacity=status.configured?'1':'.45';$('#gmailTest').disabled=!status.connected;$('#gmailRunNow').disabled=!status.connected;$('#gmailDisconnect').disabled=!status.connected;$('#gmailSetupHelp').textContent=status.configured?`Authorised redirect URI: ${status.redirectUri}`:`To activate the login button, add GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and GMAIL_TOKEN_KEY on the server. Redirect URI: ${status.redirectUri}`;}
+  try{const status=await api('/api/gmail/status');const label=$('#gmailStatus');const connect=$('#gmailConnect');label.textContent=status.connected?`Connected sender · ${status.emailAddress||'Google account'}`:status.configured?'Ready to connect a Google account':'Google OAuth server credentials required';label.className=status.connected?'gmail-connected':'gmail-not-connected';connect.textContent=status.connected?'Change Google account':'Connect Google account';connect.style.pointerEvents=status.configured?'':'none';connect.style.opacity=status.configured?'1':'.45';$('#gmailTest').disabled=!status.connected;$('#gmailRunNow').disabled=!status.connected;$('#gmailDisconnect').disabled=!status.connected;$('#gmailSetupHelp').textContent=status.configured?(status.connected?'Choose “Change Google account” to use another sender now or transfer sending to the pharmacy account later. The pharmacy recipient above remains separate.':`Google will ask which account to use. You can connect another approved account now and change it to the pharmacy account later. Redirect URI: ${status.redirectUri}`):`To activate the login button, add GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and GMAIL_TOKEN_KEY on the server. Redirect URI: ${status.redirectUri}`;}
   catch(error){$('#gmailStatus').textContent=error.message;}
 }
 async function emailSettingsSubmit(event){event.preventDefault();try{await api('/api/email-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pharmacyEmail:$('#pharmacyEmail').value})});await loadState();showView('settings');toast('Pharmacy email saved.');}catch(error){toast(error.message);}}

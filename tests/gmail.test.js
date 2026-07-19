@@ -40,6 +40,36 @@ test('Gmail tokens are encrypted at rest', () => {
   fs.rmSync(dir, { recursive:true, force:true });
 });
 
+test('Gmail connection allows choosing another Google account and requests its email', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'daa-gmail-switch-'));
+  const tokenFile = path.join(dir, 'token.json');
+  const requests = [];
+  const service = new GmailService({
+    clientId:'client',
+    clientSecret:'secret',
+    redirectUri:'https://example.com/callback',
+    tokenFile,
+    encryptionKey:'test-key',
+    fetchImpl:async (url, options = {}) => {
+      requests.push({ url, options });
+      if (url === 'https://oauth2.googleapis.com/token') return new Response(JSON.stringify({ access_token:'access-token', refresh_token:'refresh-token', expires_in:3600 }), { status:200 });
+      if (url === 'https://openidconnect.googleapis.com/v1/userinfo') return new Response(JSON.stringify({ email:'temporary.sender@example.com', email_verified:true }), { status:200 });
+      return new Response('{}', { status:404 });
+    }
+  });
+  const loginUrl = new URL(service.authorizationUrl('secure-state'));
+  assert.equal(loginUrl.searchParams.get('prompt'), 'select_account consent');
+  assert.equal(loginUrl.searchParams.get('state'), 'secure-state');
+  assert.match(loginUrl.searchParams.get('scope'), /\bopenid\b/);
+  assert.match(loginUrl.searchParams.get('scope'), /\bemail\b/);
+  assert.match(loginUrl.searchParams.get('scope'), /gmail\.send/);
+  const tokens = await service.exchangeCode('authorisation-code');
+  assert.equal(tokens.emailAddress, 'temporary.sender@example.com');
+  assert.equal(service.status().emailAddress, 'temporary.sender@example.com');
+  assert.equal(requests[1].options.headers.Authorization, 'Bearer access-token');
+  fs.rmSync(dir, { recursive:true, force:true });
+});
+
 test('special queue accepts S8 and explicit special orders only', () => {
   assert.equal(isS8Medication({ schedule:'S8', medicine:'Example' }), true);
   assert.equal(isS8Medication({ medicine:'Vyvanse 30mg' }), true);
