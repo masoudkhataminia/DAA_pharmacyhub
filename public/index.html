@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260719-doctor-update-preview-v1" />
+  <link rel="stylesheet" href="/styles.css?v=20260719-doctor-patient-search-preview-v1" />
 </head>
 <body>
   <aside class="sidebar">
@@ -160,7 +160,7 @@
     </section>
 
     <section id="doctor" class="view">
-      <section class="panel doctor-ai-panel"><div class="panel-head"><div><h2>Doctor Change → Pack Amendment</h2><p class="muted">Paste an email or upload a medication summary. AI proposes the differences; a pharmacist must approve every change.</p></div><span id="doctorAiStatus">Checking AI configuration…</span></div><form id="doctorAiForm" class="doctor-ai-form"><label class="field"><span>Patient</span><select id="doctorAiPatient" name="patientId"></select></label><label class="field doctor-source-field"><span>Doctor email / medication summary</span><textarea id="doctorSourceText" name="sourceText" rows="8" maxlength="30000" placeholder="Paste or type the full doctor email or medication summary here…"></textarea><small id="doctorTextCount">0 / 30,000 characters</small></label><label class="field doctor-file-field"><span>Upload document</span><input id="doctorSourceFile" name="file" type="file" accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.webp"><small id="doctorFileName">PDF, Word, RTF, TXT or image · maximum 15 MB</small></label><div id="doctorInputStatus" class="doctor-input-status" role="status" aria-live="polite">Type or paste the doctor update, or choose a document.</div><div class="doctor-safety"><b>Clinical safety gate</b><br>AI output is a proposal only. DAA never changes MyPak/MPS. Approve or reject each line before producing the pack worksheet.</div><button id="doctorAnalyseBtn" type="submit">Analyse medication changes</button></form><div id="patientPackSnapshot" class="pack-snapshot"></div></section>
+      <section class="panel doctor-ai-panel"><div class="panel-head"><div><h2>Doctor Change → Pack Amendment</h2><p class="muted">Paste an email or upload a medication summary. AI proposes the differences; a pharmacist must approve every change.</p></div><span id="doctorAiStatus">Checking AI configuration…</span></div><form id="doctorAiForm" class="doctor-ai-form"><div class="field doctor-patient-picker"><label for="doctorPatientSearch">Search and select patient</label><div class="doctor-patient-search-control"><span aria-hidden="true">⌕</span><input id="doctorPatientSearch" type="search" placeholder="Name, room, facility, group or MyPak ID…" autocomplete="off" aria-controls="doctorPatientResults" aria-expanded="false"><input id="doctorAiPatient" name="patientId" type="hidden"></div><div id="doctorPatientResults" class="doctor-patient-results" role="listbox"></div><div id="doctorSelectedPatient" class="doctor-selected-patient"></div><small>Only a patient you explicitly select will be analysed.</small></div><label class="field doctor-source-field"><span>Doctor email / medication summary</span><textarea id="doctorSourceText" name="sourceText" rows="8" maxlength="30000" placeholder="Paste or type the full doctor email or medication summary here…"></textarea><small id="doctorTextCount">0 / 30,000 characters</small></label><label class="field doctor-file-field"><span>Upload document</span><input id="doctorSourceFile" name="file" type="file" accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.webp"><small id="doctorFileName">PDF, Word, RTF, TXT or image · maximum 15 MB</small></label><div id="doctorInputStatus" class="doctor-input-status" role="status" aria-live="polite">Search and select a patient, then type or upload the doctor update.</div><div class="doctor-safety"><b>Clinical safety gate</b><br>AI output is a proposal only. DAA never changes MyPak/MPS. Approve or reject each line before producing the pack worksheet.</div><button id="doctorAnalyseBtn" type="submit">Analyse medication changes</button></form><div id="patientPackSnapshot" class="pack-snapshot"></div></section>
       <section class="panel"><div class="panel-head"><h2>Analysis & exact affected packs</h2><span>live MyPak pack status, contents, dates and compartments</span></div><div id="doctorAnalysisWorkbench"></div></section>
       <div class="two-col wide-left">
         <section class="panel"><div class="panel-head"><h2>Recent change analyses</h2><span>pharmacist review history</span></div><div id="doctorAnalysisList" class="queue"></div></section>
@@ -179,6 +179,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-	  <script src="/app.js?v=20260719-doctor-update-preview-v1"></script>
+	  <script src="/app.js?v=20260719-doctor-patient-search-preview-v1"></script>
 </body>
 </html>

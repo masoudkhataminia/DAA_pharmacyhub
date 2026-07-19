@@ -8,7 +8,7 @@ let selectedSmartPatientId = null;
 let SMART_PATIENT_DETAILS = null;
 let SMART_AI_STATUS = { configured:false };
 let DOCTOR_AI_STATUS = { configured:false, maxFileSizeMb:15 };
-const CLIENT_BUILD_VERSION = '20260719-doctor-update-preview-v1';
+const CLIENT_BUILD_VERSION = '20260719-doctor-patient-search-preview-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -704,12 +704,40 @@ async function generateSpecialPdf(){
   toast('Special Order PDF created.'); window.open(`/api/special-order-letter/${r.id}/pdf`,'_blank'); await loadState(); showView('special');
 }
 
+function doctorSearchValue(value){return String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();}
+function doctorSearchPatients(){return (STATE?.patientsComputed||[]).filter(patient=>patient.mypakPatientId&&patient.active!==false);}
+function doctorPatientMeta(patient){return [patient.patientGroup,patient.room?`Room ${patient.room}`:'',patient.facilityWard,patient.mypakPatientId?`MyPak ${patient.mypakPatientId}`:''].filter(Boolean).join(' · ');}
+function doctorPatientMatches(patient,query){const haystack=doctorSearchValue([patient.fullName,patient.firstName,patient.lastName,patient.patientGroup,patient.room,patient.facilityWard,patient.mypakPatientId,patient.mypakExternalPatientId,patient.externalId].filter(Boolean).join(' '));return doctorSearchValue(query).split(' ').filter(Boolean).every(token=>haystack.includes(token));}
+function renderDoctorPatientSearch({showResults=false}={}){
+  const input=$('#doctorPatientSearch'),hidden=$('#doctorAiPatient'),results=$('#doctorPatientResults'),selectedBox=$('#doctorSelectedPatient');if(!input||!hidden||!results||!selectedBox)return;
+  const patients=doctorSearchPatients();let selected=patients.find(patient=>patient.id===hidden.value);
+  if(hidden.value&&!selected){hidden.value='';selected=null;}
+  if(selected&&document.activeElement!==input)input.value=selected.fullName;
+  selectedBox.innerHTML=selected?`<div class="doctor-selected-card"><div><span>Selected patient</span><b>${esc(selected.fullName)}</b><small>${esc(doctorPatientMeta(selected)||'MyPak patient')}</small></div><button type="button" class="ghost" onclick="clearDoctorPatient()">Change</button></div>`:'';
+  const query=input.value.trim();
+  if(!showResults){results.innerHTML='';input.setAttribute('aria-expanded','false');return;}
+  if(!query){results.innerHTML=empty(patients.length?'Start typing a patient name, room, facility, group or MyPak ID.':'No synced MyPak patients are available.');input.setAttribute('aria-expanded','true');return;}
+  const matches=patients.filter(patient=>doctorPatientMatches(patient,query)).slice(0,12);
+  results.innerHTML=matches.length?matches.map(patient=>`<button type="button" class="doctor-patient-result" role="option" onclick="selectDoctorPatient('${patient.id}')"><span><b>${esc(patient.fullName)}</b><small>${esc(doctorPatientMeta(patient)||'MyPak patient')}</small></span><em>Select</em></button>`).join(''):empty(`No MyPak patient matches “${query}”.`);
+  input.setAttribute('aria-expanded','true');
+}
+function doctorPatientSearchInput(){
+  const input=$('#doctorPatientSearch'),hidden=$('#doctorAiPatient');const selected=doctorSearchPatients().find(patient=>patient.id===hidden.value);
+  if(selected&&doctorSearchValue(input.value)!==doctorSearchValue(selected.fullName)){hidden.value='';$('#doctorSelectedPatient').innerHTML='';$('#patientPackSnapshot').innerHTML='';}
+  renderDoctorPatientSearch({showResults:true});updateDoctorInputStatus();
+}
+function selectDoctorPatient(patientId){
+  const patient=doctorSearchPatients().find(item=>item.id===patientId);if(!patient)return;
+  $('#doctorAiPatient').value=patient.id;$('#doctorPatientSearch').value=patient.fullName;renderDoctorPatientSearch();updateDoctorInputStatus();loadPatientPackSnapshot(patient.id);
+}
+function clearDoctorPatient(){
+  $('#doctorAiPatient').value='';$('#doctorPatientSearch').value='';$('#doctorSelectedPatient').innerHTML='';$('#patientPackSnapshot').innerHTML='';renderDoctorPatientSearch({showResults:true});updateDoctorInputStatus();$('#doctorPatientSearch').focus();
+}
 function renderDoctor(){
   const list = STATE.dashboard.doctorUpdates || [];
   $('#doctorList').innerHTML = list.length ? list.map(u=>`<div class="queue-card"><div><h3>${esc(u.patientFullName)}</h3><p>${esc(u.changeType)} · ${esc(u.medicine)} · ${esc(u.effectiveFrom)}</p><div class="badges">${badge(u.status,'warn')}${u.risk?badge(u.risk,/urgent|current|immediate/i.test(u.risk)?'danger':'blue'):''}</div></div><button class="ghost" onclick="markDoctor('${u.id}','Applied / closed')">Close</button></div>`).join('') : empty('No pending doctor updates.');
   $('#doctorForm').innerHTML = `<div class="field full"><label>Patient</label><select name="patientId">${STATE.patientsComputed.map(p=>`<option value="${p.id}">${esc(p.fullName)}</option>`).join('')}</select></div>${fieldHTML('receivedDate','Received date','date','')}${fieldHTML('source','Source','text','Doctor letter')}${fieldHTML('changeType','Change type','select:Add medicine|Stop medicine|Dose increase|Dose decrease|Direction changed|Timing changed|Temporary course|Clarification','')}${fieldHTML('medicine','Medicine','text','')}${fieldHTML('oldDirection','Old direction','text','')}${fieldHTML('newDirection','New direction','text','')}${fieldHTML('effectiveFrom','Effective from','select:Needs review|Immediately|Current pack|Next pack|Specific date|Waiting for script|Waiting for clarification','')}${fieldHTML('risk','Risk','select:Routine|Urgent|Affects current pack|S8/S4D|Waiting for script','')}${fieldHTML('notes','Notes','textarea','')}<div class="field full"><button>Add pending update</button></div>`;
-  const patientSelect=$('#doctorAiPatient');
-  if(patientSelect){const selected=patientSelect.value;patientSelect.innerHTML=(STATE.patientsComputed||[]).filter(p=>p.mypakPatientId).map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(p.fullName)} · MyPak</option>`).join('');if(!activeDoctorAnalysisId&&patientSelect.value)loadPatientPackSnapshot(patientSelect.value);updateDoctorInputStatus();}
+  renderDoctorPatientSearch();updateDoctorInputStatus();
   const analyses=STATE.doctorChangeAnalyses||[];
   $('#doctorAnalysisList').innerHTML=analyses.length?analyses.slice(0,60).map(a=>`<div class="queue-card ${a.id===activeDoctorAnalysisId?'selected-card':''}"><div><h3>${esc(a.patientFullName)}</h3><p>${esc(a.sourceName)} · ${(a.changes||[]).length} proposed change(s)</p><div class="badges">${badge(a.status,a.status==='Approved for pack worksheet'?'ok':'warn')} ${a.packImpactUpdatedAt?badge('Pack data refreshed','mint'):''}</div></div><button class="ghost" onclick="openDoctorAnalysis('${a.id}')">Open</button></div>`).join(''):empty('No AI doctor-change analyses yet.');
   if(activeDoctorAnalysisId&&!analyses.some(a=>a.id===activeDoctorAnalysisId))activeDoctorAnalysisId=null;
@@ -734,7 +762,7 @@ function updateDoctorInputStatus(override={}){
   const count=$('#doctorTextCount');if(count)count.textContent=`${state.text.length.toLocaleString('en-AU')} / 30,000 characters`;
   const fileName=$('#doctorFileName');if(fileName){const size=state.file?(state.file.size<1024*1024?`${Math.max(1,Math.round(state.file.size/1024))} KB`:`${(state.file.size/1024/1024).toFixed(2)} MB`):'';fileName.textContent=state.file?`${state.file.name} · ${size}`:'PDF, Word, RTF, TXT or image · maximum 15 MB';}
   let message='Type or paste the doctor update, or choose a document.';let level='neutral';
-  if(!state.hasPatient){message='No MyPak patient is available. Sync or import patients first.';level='error';}
+  if(!state.hasPatient){message=doctorSearchPatients().length?'Search and select the correct patient before analysis.':'No MyPak patient is available. Sync or import patients first.';level='error';}
   else if(!state.fileSupported){message='Unsupported file. Choose PDF, Word, RTF, TXT, JPG, PNG or WEBP.';level='error';}
   else if(!state.fileWithinLimit){message='This document is larger than 15 MB. Choose a smaller file.';level='error';}
   else if(state.hasSource&&!DOCTOR_AI_STATUS.configured){message='Your text or document is ready. The secure AI connection must be enabled on the server before analysis.';level='warning';}
@@ -772,7 +800,7 @@ async function saveDoctorAnalysis(id,refreshPacks){
 async function doctorAiSubmit(event){
   event.preventDefault();const form=event.currentTarget;const button=$('#doctorAnalyseBtn');const input=updateDoctorInputStatus();if(!input.ready)return;
   let finalStatus={};button.dataset.busy='1';button.disabled=true;button.textContent='Analysing safely…';updateDoctorInputStatus({message:'Reading the supplied update and comparing it with the selected medication profile…',level:'working'});
-  try{const result=await api('/api/doctor-change/analyse',{method:'POST',body:new FormData(form)});activeDoctorAnalysisId=result.id;await loadState();await api(`/api/doctor-change/analyses/${result.id}/pack-impact`,{method:'POST'});await loadState();activeDoctorAnalysisId=result.id;renderDoctor();form.reset();finalStatus={message:'Draft changes extracted. Review and approve or reject every line below.',level:'ready'};toast('Draft changes extracted. Review every line before approval.');}
+  try{const result=await api('/api/doctor-change/analyse',{method:'POST',body:new FormData(form)});activeDoctorAnalysisId=result.id;await loadState();await api(`/api/doctor-change/analyses/${result.id}/pack-impact`,{method:'POST'});await loadState();activeDoctorAnalysisId=result.id;renderDoctor();form.reset();renderDoctorPatientSearch();finalStatus={message:'Draft changes extracted. Review and approve or reject every line below.',level:'ready'};toast('Draft changes extracted. Review every line before approval.');}
   catch(error){finalStatus={message:error.message,level:'error'};toast(error.message);}finally{delete button.dataset.busy;button.textContent='Analyse medication changes';updateDoctorInputStatus(finalStatus);}
 }
 async function markDoctor(id,status){ await api(`/api/doctor-updates/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}); toast('Doctor update closed.'); await loadState(); }
@@ -870,7 +898,9 @@ $('#smartScriptForm').addEventListener('submit',runSmartScriptForecast);
 $('#savePatientBtn').addEventListener('click',savePatient);
 $('#doctorForm').addEventListener('submit',doctorSubmit);
 $('#doctorAiForm').addEventListener('submit',doctorAiSubmit);
-$('#doctorAiPatient').addEventListener('change',event=>{loadPatientPackSnapshot(event.target.value);updateDoctorInputStatus();});
+$('#doctorPatientSearch').addEventListener('input',doctorPatientSearchInput);
+$('#doctorPatientSearch').addEventListener('focus',()=>renderDoctorPatientSearch({showResults:true}));
+$('#doctorPatientSearch').addEventListener('keydown',event=>{if(event.key==='Escape'){renderDoctorPatientSearch();event.currentTarget.blur();}});
 $('#doctorSourceText').addEventListener('input',()=>updateDoctorInputStatus());
 $('#doctorSourceFile').addEventListener('change',()=>updateDoctorInputStatus());
 $('#specialOrderForm').addEventListener('submit',specialOrderSubmit);
@@ -878,7 +908,7 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 $('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailDisconnect').addEventListener('click',gmailDisconnect);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
-window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.deleteScriptRequest=deleteScriptRequest; window.printScriptRequest=printScriptRequest; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis;
+window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.deleteScriptRequest=deleteScriptRequest; window.printScriptRequest=printScriptRequest; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis; window.selectDoctorPatient=selectDoctorPatient; window.clearDoctorPatient=clearDoctorPatient;
 window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient; window.selectSmartPatient=selectSmartPatient; window.runSmartAiReview=runSmartAiReview;
 window.addEventListener('focus', checkForAppUpdate);
 document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
