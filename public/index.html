@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260719-gmail-account-switch-v1" />
+  <link rel="stylesheet" href="/styles.css?v=20260719-professional-polish-preview-v3" />
 </head>
 <body>
   <aside class="sidebar">
@@ -12,15 +12,20 @@
       <div class="brand-mark">W</div>
       <div><strong>DAA Pharmacy Hub</strong><span>MyPak + MPS connected workflow</span></div>
     </div>
-    <button class="nav active" data-view="dashboard">Dashboard</button>
-    <button class="nav" data-view="patients">Patients</button>
-    <button class="nav" data-view="scripts">Script Requests</button>
-    <button class="nav" data-view="smart">Smart Script Request</button>
-    <button class="nav" data-view="special">Special Orders / S8</button>
-    <button class="nav" data-view="doctor">Doctor Updates</button>
-    <button class="nav" data-view="settings">Settings & Audit</button>
+    <button id="mobileMenuToggle" class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="primaryNavLinks"><span class="menu-lines" aria-hidden="true"></span><span>Menu</span></button>
+    <div id="primaryNavLinks" class="nav-links">
+      <button class="nav active" data-view="dashboard">Dashboard</button>
+      <button class="nav" data-view="patients">Patients</button>
+      <button class="nav" data-view="scripts">Script Requests</button>
+      <button class="nav" data-view="smart">Smart Script Request</button>
+      <button class="nav" data-view="special">Special Orders / S8</button>
+      <button class="nav" data-view="doctor">Doctor Updates</button>
+      <button class="nav mobile-only-nav" data-view="import">Import Centre</button>
+      <button class="nav" data-view="settings">Settings & Audit</button>
+    </div>
     <div class="side-note">Live MyPak / MPS data · safe pharmacy workflow</div>
   </aside>
+  <button id="mobileMenuBackdrop" class="mobile-menu-backdrop" type="button" aria-label="Close navigation menu"></button>
 
   <main class="main">
     <header class="topbar">
@@ -29,6 +34,9 @@
         <p id="pageSubtitle">Prioritise packing, dispensing, ordering and prescription requests by pickup risk.</p>
       </div>
       <div class="top-actions">
+        <form id="globalPatientSearchForm" class="global-patient-search" role="search">
+          <span aria-hidden="true">⌕</span><input id="globalPatientSearch" type="search" placeholder="Search patient…" autocomplete="off" aria-label="Search patient" />
+        </form>
         <button class="ghost" id="refreshBtn">Refresh</button>
       </div>
     </header>
@@ -161,6 +169,6 @@
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=20260719-gmail-account-switch-v1"></script>
+  <script src="/app.js?v=20260719-professional-polish-preview-v3"></script>
 </body>
 </html>

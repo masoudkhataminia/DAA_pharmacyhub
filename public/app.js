@@ -4,7 +4,7 @@ let editPatientId = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
 let SMART_QUEUE = null;
-const CLIENT_BUILD_VERSION = '20260719-gmail-account-switch-v1';
+const CLIENT_BUILD_VERSION = '20260719-professional-polish-preview-v3';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -668,6 +668,27 @@ function showView(id){
   $$('.view').forEach(v=>v.classList.toggle('active',v.id===id));
   const titles={dashboard:['Dashboard','Prioritise packing, dispensing, ordering and prescription requests by pickup risk.'],import:['Import Centre','Stage imports safely: detect HIND, link medicines, calculate scripts, review exceptions.'],patients:['Patients','Master list for Webster/Sachet cycle, pickup date and workflow flags.'],scripts:['Script Requests','Build GP letters from patient medicine/script data.'],smart:['Smart Script Request','Forecast pack consumption and prescription coverage with auditable calculations.'],special:['Special Orders / S8','RDH, Hibiscus One, CP/NT and controlled medicine ordering by due date.'],doctor:['Doctor Updates','Medication changes stay pending until reviewed.'],settings:['Settings & Audit','Configure lead times and track changes.']};
   $('#pageTitle').textContent=titles[id][0]; $('#pageSubtitle').textContent=titles[id][1];
+  closeMobileMenu();
+}
+function closeMobileMenu(){
+  $('.sidebar')?.classList.remove('menu-open');
+  $('#mobileMenuBackdrop')?.classList.remove('open');
+  $('#mobileMenuToggle')?.setAttribute('aria-expanded','false');
+}
+function toggleMobileMenu(){
+  const sidebar=$('.sidebar'); const opening=!sidebar?.classList.contains('menu-open');
+  sidebar?.classList.toggle('menu-open',opening);
+  $('#mobileMenuBackdrop')?.classList.toggle('open',opening);
+  $('#mobileMenuToggle')?.setAttribute('aria-expanded',String(opening));
+}
+function globalPatientSearch(event){
+  event.preventDefault();
+  const query=$('#globalPatientSearch').value.trim();
+  showView('patients');
+  $('#patientFilter').value='all';
+  $('#patientSearch').value=query;
+  renderPatients();
+  $('#patientSearch').focus();
 }
 async function importForm(e){
   e.preventDefault(); const form=e.currentTarget; const type=form.dataset.import; const fd=new FormData(form);
@@ -698,6 +719,10 @@ function renderAll(){ renderDashboard(); renderImportReview(); renderPatients();
 async function loadState(){ STATE = await api('/api/state'); renderAll(); }
 
 $$('.nav').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
+$('#mobileMenuToggle').addEventListener('click',toggleMobileMenu);
+$('#mobileMenuBackdrop').addEventListener('click',closeMobileMenu);
+$('#globalPatientSearchForm').addEventListener('submit',globalPatientSearch);
+document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileMenu();});
 $('#refreshBtn').addEventListener('click',()=>syncMyPakPatients());
 $('#mypakSyncBtn').addEventListener('click',syncMyPakPatients);
 $('#mypakSyncBtnSettings').addEventListener('click',syncMyPakPatients);

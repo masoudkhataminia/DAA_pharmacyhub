@@ -24,7 +24,7 @@ const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-token.enc');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260719-gmail-account-switch-v1';
+const APP_BUILD_VERSION = '20260719-professional-polish-preview-v3';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
