@@ -70,7 +70,7 @@ test('Gmail connection allows choosing another Google account and requests its e
   fs.rmSync(dir, { recursive:true, force:true });
 });
 
-test('Google sign-in can verify a transfer account without replacing the owner token', async () => {
+test('Google sign-in can inspect a different account without overwriting stored tokens', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'daa-gmail-verify-'));
   const tokenFile = path.join(dir, 'owner-token.enc');
   const service = new GmailService({
@@ -80,7 +80,7 @@ test('Google sign-in can verify a transfer account without replacing the owner t
       : new Response(JSON.stringify({ email:'new-owner@example.com' }), { status:200 })
   });
   service.writeTokens({ refreshToken:'current-owner-refresh', emailAddress:'current-owner@example.com' });
-  const verified = await service.exchangeCode('transfer-code', { persist:false });
+  const verified = await service.exchangeCode('another-account-code', { persist:false });
   assert.equal(verified.emailAddress, 'new-owner@example.com');
   assert.equal(service.readTokens().emailAddress, 'current-owner@example.com');
   fs.rmSync(dir, { recursive:true, force:true });

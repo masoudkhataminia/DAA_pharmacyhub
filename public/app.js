@@ -10,7 +10,7 @@ let SMART_PATIENT_DETAILS = null;
 let SMART_AI_STATUS = { configured:false };
 let DOCTOR_AI_STATUS = { configured:false, maxFileSizeMb:15 };
 let AUTH_STATE = null;
-const CLIENT_BUILD_VERSION = '20260719-google-workspace-mypak-login-v1';
+const CLIENT_BUILD_VERSION = '20260719-settings-redesign-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -36,27 +36,17 @@ function showAuthGate(status=AUTH_STATE||{}){
   $$('.auth-protected').forEach(element=>element.classList.toggle('hidden',!authorised));
   $('#authGate').classList.toggle('hidden',authorised);
   if(authorised){$('#signedInAccount').innerHTML=`<span>Signed in & sending as</span><b>${esc(status.email)}</b>`;return;}
-  const signIn=$('#googleSignIn'),signOut=$('#authSignOut'),transfer=$('#authTransferState');
+  const signIn=$('#googleSignIn'),signOut=$('#authSignOut');
   signIn.href='/api/auth/google';
-  signIn.textContent=status.ownerSetupReady?'Secure workspace with Google':'Continue with Google';
-  signIn.classList.toggle('hidden',status.role==='transfer_pending'||(!status.configured&&!status.ownerSetupReady));
+  signIn.textContent='Continue with Google';
+  signIn.classList.toggle('hidden',!status.configured);
   signOut.classList.toggle('hidden',!status.signedIn);
-  transfer.classList.add('hidden');
-  if(status.ownerSetupReady){$('#authTitle').textContent='Secure your existing pharmacy workspace';$('#authMessage').textContent='Choose the Google account that will own the existing patient data and send pharmacy email. This one-time setup does not delete or move any records.';return;}
-  if(!status.configured){$('#authTitle').textContent='Secure setup link required';$('#authMessage').textContent='Open the private one-time workspace setup link supplied after deployment.';return;}
-  if(status.role==='transfer_pending'){$('#authTitle').textContent='New account verified';$('#authMessage').textContent='This account still cannot see patient data. The current owner must complete the workspace transfer first.';transfer.textContent=`Verified account: ${status.email}`;transfer.classList.remove('hidden');return;}
+  if(!status.configured){$('#authTitle').textContent='Google sign-in is unavailable';$('#authMessage').textContent='Google sign-in is not configured on this server yet.';return;}
   $('#authTitle').textContent='Sign in to your pharmacy workspace';
-  $('#authMessage').textContent='The Google account you sign in with is also the protected Gmail sender for prescription and pharmacy emails.';
-}
-async function acceptWorkspaceSetupLink(){
-  const token=new URLSearchParams(location.hash.replace(/^#/, '')).get('workspaceSetup');
-  if(!token)return;
-  history.replaceState(null,'',`${location.pathname}${location.search}`);
-  const response=await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});
-  if(!response.ok)throw new Error((await response.json().catch(()=>({error:'Secure workspace setup failed.'}))).error);
+  $('#authMessage').textContent='Sign in with any verified Google account. Each email has its own private pharmacy workspace and Gmail sender.';
 }
 async function loadAuthStatus(){
-  try{await acceptWorkspaceSetupLink();AUTH_STATE=await fetch('/api/auth/status',{cache:'no-store'}).then(response=>response.json());showAuthGate(AUTH_STATE);return Boolean(AUTH_STATE.authenticated);}
+  try{AUTH_STATE=await fetch('/api/auth/status',{cache:'no-store'}).then(response=>response.json());showAuthGate(AUTH_STATE);return Boolean(AUTH_STATE.authenticated);}
   catch(error){showAuthGate({configured:false,signedIn:false,authenticated:false});$('#authMessage').textContent=error.message;return false;}
 }
 async function workspaceSignOut(){
@@ -905,54 +895,34 @@ async function doctorAiSubmit(event){
 async function markDoctor(id,status){ await api(`/api/doctor-updates/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}); toast('Doctor update closed.'); await loadState(); }
 function renderSettings(){
   const s=STATE.settings;
-  const fields=[['defaultCycleDays','Default cycle days'],['defaultPackLeadDays','Pack lead days'],['defaultDispenseLeadDays','Dispense lead days'],['defaultOrderLeadDays','Order lead days'],['urgentWindowDays','Urgent window days'],['dueSoonWindowDays','Due soon window'],['scriptLowRepeatThreshold','Low repeat threshold'],['monthlyDays','Monthly cycle days']];
-  $('#settingsForm').innerHTML=fields.map(([k,l])=>fieldHTML(k,l,'number',s[k])).join('')+`<div class="field full"><button>Save settings</button></div>`;
+  const fields=[
+    ['defaultCycleDays','Default pack cycle','Standard number of days between patient pickups'],
+    ['monthlyDays','Monthly cycle','Days used when a patient is marked as monthly'],
+    ['defaultPackLeadDays','Pack preparation lead','How early packing should appear in the work queue'],
+    ['defaultDispenseLeadDays','Dispensing lead','How early medicines should appear for dispensing'],
+    ['defaultOrderLeadDays','Ordering lead','How early regular stock ordering should begin'],
+    ['urgentWindowDays','Urgent window','Days remaining before an item becomes urgent'],
+    ['dueSoonWindowDays','Due-soon window','Days remaining before an item is highlighted as due soon'],
+    ['scriptLowRepeatThreshold','Low-repeat threshold','Repeat count that triggers a prescription warning']
+  ];
+  $('#settingsForm').innerHTML=fields.map(([key,label,help])=>`<label class="settings-number-field"><span>${esc(label)}</span><small>${esc(help)}</small><div><input name="${esc(key)}" type="number" min="0" step="1" value="${esc(s[key])}" inputmode="numeric"><em>${key==='scriptLowRepeatThreshold'?'repeats':'days'}</em></div></label>`).join('')+`<div class="settings-save-row"><div><b>Review before saving</b><span>Updated values are used the next time queues and due dates are calculated.</span></div><button>Save workflow settings</button></div>`;
   $('#pharmacyEmail').value=s.pharmacyEmail||'';
+  $('#settingsHeroEmail').textContent=AUTH_STATE?.email||'—';
   const logs=STATE.specialEmailLog||[];
-  $('#specialEmailLog').innerHTML=logs.length?`<table><thead><tr><th>Time</th><th>Patient</th><th>Medicine</th><th>Result</th></tr></thead><tbody>${logs.slice(0,50).map(log=>`<tr><td>${esc(new Date(log.at).toLocaleString('en-AU'))}</td><td>${esc(log.patientFullName)}</td><td>${esc(log.medicine)}</td><td>${esc(log.status)}${log.error?`<br><small class="email-error">${esc(log.error)}</small>`:''}</td></tr>`).join('')}</tbody></table>`:empty('No automatic special order emails sent yet.');
-  $('#auditLog').innerHTML=(STATE.auditLog||[]).length?`<table><thead><tr><th>Time</th><th>Action</th><th>Details</th></tr></thead><tbody>${STATE.auditLog.slice(0,200).map(a=>`<tr><td>${esc((a.at||'').slice(0,19).replace('T',' '))}</td><td>${esc(a.action)}</td><td><code>${esc(JSON.stringify(a.details||{}))}</code></td></tr>`).join('')}</tbody></table>`:empty('No audit log yet.');
+  $('#specialEmailLog').innerHTML=logs.length?`<table><thead><tr><th>Time</th><th>Patient</th><th>Medicine</th><th>Result</th></tr></thead><tbody>${logs.slice(0,50).map(log=>`<tr><td>${esc(new Date(log.at).toLocaleString('en-AU'))}</td><td>${esc(log.patientFullName)}</td><td>${esc(log.medicine)}</td><td>${esc(log.status)}${log.error?`<br><small class="email-error">${esc(log.error)}</small>`:''}</td></tr>`).join('')}</tbody></table>`:empty('No automatic pharmacy emails have been sent yet.');
   refreshGmailStatus();
 }
-function renderWorkspaceTransfer(){
-  const transfer=AUTH_STATE?.transfer||null;const owner=AUTH_STATE?.email||'';
-  $('#workspaceOwnerEmail').textContent=owner||'—';$('#transferCurrentEmail').value=owner;
-  $('#workspaceTransferBadge').textContent=transfer?(transfer.verified?'New account verified':'Waiting for verification'):'No transfer pending';
-  $('#workspaceTransferBadge').className=transfer?(transfer.verified?'gmail-connected':'gmail-not-connected'):'';
-  $('#transferTargetEmail').value=transfer?.targetEmail||'';$('#transferTargetEmail').disabled=Boolean(transfer);
-  $('#workspaceTransferForm').querySelector('button').disabled=Boolean(transfer);
-  $('#completeWorkspaceTransfer').disabled=!transfer?.verified||transfer?.expired;
-  $('#cancelWorkspaceTransfer').disabled=!transfer;
-  const status=$('#workspaceTransferStatus');
-  if(!transfer){status.textContent='The new account will see no patient information until it verifies the invitation and you complete the transfer.';status.className='workspace-transfer-status';return;}
-  if(transfer.expired){status.textContent=`The invitation for ${transfer.targetEmail} expired. Cancel it and create a new transfer.`;status.className='workspace-transfer-status error';return;}
-  status.textContent=transfer.verified?`${transfer.targetEmail} is verified. Complete transfer to move all patient data and Gmail sending ownership.`:`Verification email sent to ${transfer.targetEmail}. Patient data remains hidden until that account verifies.`;
-  status.className=`workspace-transfer-status ${transfer.verified?'ready':'warning'}`;
-}
 async function refreshGmailStatus(){
-  try{AUTH_STATE=await api('/api/auth/status');const status=await api('/api/gmail/status');const label=$('#gmailStatus');label.textContent=status.connected?`Signed in & sending as ${status.emailAddress}`:'Sign in again to restore Gmail sending';label.className=status.connected?'gmail-connected':'gmail-not-connected';$('#gmailTest').disabled=!status.connected;$('#gmailRunNow').disabled=!status.connected;$('#gmailSetupHelp').textContent=status.connected?'All outgoing Gmail is sent from this signed-in account.':'Workspace data is available, but Gmail sending needs the owner to sign in again.';renderWorkspaceTransfer();}
+  try{AUTH_STATE=await api('/api/auth/status');const status=await api('/api/gmail/status');const label=$('#gmailStatus');$('#workspaceOwnerEmail').textContent=AUTH_STATE?.email||'—';$('#settingsHeroEmail').textContent=AUTH_STATE?.email||'—';label.textContent=status.connected?'Connected sender':'Sender needs sign-in';label.className=status.connected?'gmail-connected':'gmail-not-connected';$('#gmailTest').disabled=!status.connected;$('#gmailRunNow').disabled=!status.connected;$('#gmailSetupHelp').textContent=status.connected?'Outgoing Gmail uses this account.':'This workspace stays private, but Gmail sending needs this account to sign in again.';}
   catch(error){$('#gmailStatus').textContent=error.message;}
 }
 async function emailSettingsSubmit(event){event.preventDefault();try{await api('/api/email-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pharmacyEmail:$('#pharmacyEmail').value})});await loadState();showView('settings');toast('Pharmacy email saved.');}catch(error){toast(error.message);}}
 async function gmailTest(){try{await api('/api/gmail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('#pharmacyEmail').value})});toast('Test email sent.');}catch(error){toast(error.message);}}
 async function runSpecialEmailScheduler(){try{const result=await api('/api/special-orders/run-email-scheduler',{method:'POST'});await loadState();showView('settings');toast(result.skipped?`Scheduler paused: ${result.reason}`:`Due emails complete: ${result.sent} sent · ${result.failed} failed.`);}catch(error){toast(error.message);}}
-async function startWorkspaceTransfer(event){
-  event.preventDefault();const targetEmail=$('#transferTargetEmail').value.trim();if(!targetEmail)return;
-  const button=event.currentTarget.querySelector('button');button.disabled=true;button.textContent='Sending verification…';
-  try{await api('/api/workspace/transfer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetEmail})});await refreshGmailStatus();toast(`Verification sent to ${targetEmail}.`);}catch(error){toast(error.message);}finally{button.textContent='Email verification link';button.disabled=Boolean(AUTH_STATE?.transfer);}
-}
-async function completeWorkspaceTransfer(){
-  const transfer=AUTH_STATE?.transfer;if(!transfer?.verified)return;
-  if(!window.confirm(`Transfer the complete pharmacy workspace and Gmail sender from ${AUTH_STATE.email} to ${transfer.targetEmail}? Your current account will immediately lose patient-data access.`))return;
-  try{await api('/api/workspace/transfer/complete',{method:'POST'});toast('Workspace ownership and Gmail sender transferred.');await loadAuthStatus();}catch(error){toast(error.message);}
-}
-async function cancelWorkspaceTransfer(){
-  if(!AUTH_STATE?.transfer||!window.confirm(`Cancel the transfer to ${AUTH_STATE.transfer.targetEmail}?`))return;
-  try{await api('/api/workspace/transfer',{method:'DELETE'});await refreshGmailStatus();toast('Workspace transfer cancelled.');}catch(error){toast(error.message);}
-}
 function showView(id){
   $$('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===id));
   $$('.view').forEach(v=>v.classList.toggle('active',v.id===id));
-  const titles={dashboard:['Dashboard','Prioritise packing, dispensing, ordering and prescription requests by pickup risk.'],import:['Import Centre','Stage imports safely: detect HIND, link medicines, calculate scripts, review exceptions.'],patients:['Patients','Master list for Webster/Sachet cycle, pickup date and workflow flags.'],scripts:['Script Requests','Build GP letters from patient medicine/script data.'],smart:['Smart Script Request','Forecast pack consumption and prescription coverage with auditable calculations.'],special:['Special Orders / S8','RDH, Hibiscus One, CP/NT and controlled medicine ordering by due date.'],doctor:['Doctor Updates','Medication changes stay pending until reviewed.'],settings:['Settings & Audit','Configure lead times and track changes.']};
+  const titles={dashboard:['Dashboard','Prioritise packing, dispensing, ordering and prescription requests by pickup risk.'],import:['Import Centre','Stage imports safely: detect HIND, link medicines, calculate scripts, review exceptions.'],patients:['Patients','Master list for Webster/Sachet cycle, pickup date and workflow flags.'],scripts:['Script Requests','Build GP letters from patient medicine/script data.'],smart:['Smart Script Request','Forecast pack consumption and prescription coverage with auditable calculations.'],special:['Special Orders / S8','RDH, Hibiscus One, CP/NT and controlled medicine ordering by due date.'],doctor:['Doctor Updates','Medication changes stay pending until reviewed.'],settings:['Settings','Manage data connections, the signed-in account and workflow timing.']};
   $('#pageTitle').textContent=titles[id][0]; $('#pageSubtitle').textContent=titles[id][1];
   closeMobileMenu();
 }
@@ -1042,7 +1012,6 @@ $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFi
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
 $('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
-$('#workspaceTransferForm').addEventListener('submit',startWorkspaceTransfer);$('#completeWorkspaceTransfer').addEventListener('click',completeWorkspaceTransfer);$('#cancelWorkspaceTransfer').addEventListener('click',cancelWorkspaceTransfer);
 $('#workspaceSignOut').addEventListener('click',workspaceSignOut);$('#authSignOut').addEventListener('click',workspaceSignOut);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.deleteScriptRequest=deleteScriptRequest; window.printScriptRequest=printScriptRequest; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis; window.selectDoctorPatient=selectDoctorPatient; window.clearDoctorPatient=clearDoctorPatient;
 window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient; window.selectSmartPatient=selectSmartPatient; window.runSmartAiReview=runSmartAiReview;
@@ -1052,7 +1021,7 @@ setInterval(checkForAppUpdate, 60000);
 checkForAppUpdate();
 async function bootstrapApp(){
   if(!await loadAuthStatus())return;
-  try{await loadState();const authResult=new URLSearchParams(location.search).get('auth');if(authResult==='signed-in')toast('Signed in. Gmail sending uses this Google account.');if(authResult==='owner-created')toast('Workspace secured. This Google account now owns the existing patient data and sends Gmail.');await Promise.all([refreshMyPakStatus(),refreshMpsStatus(),refreshSmartAiStatus()]);}
+  try{await loadState();const authResult=new URLSearchParams(location.search).get('auth');if(authResult==='signed-in')toast(AUTH_STATE?.hasWorkspaceData?'Signed in to this account’s private workspace.':'Signed in. This account has an empty private workspace; connect MyPak and run Full Sync to add patient data.');await Promise.all([refreshMyPakStatus(),refreshMpsStatus(),refreshSmartAiStatus()]);}
   catch(error){toast(error.message);}
 }
 bootstrapApp();

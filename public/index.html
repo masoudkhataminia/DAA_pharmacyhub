@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DAA Pharmacy Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=20260719-google-workspace-mypak-login-v1" />
+  <link rel="stylesheet" href="/styles.css?v=20260719-settings-redesign-v1" />
 </head>
 <body>
   <section id="authGate" class="auth-gate">
@@ -12,11 +12,10 @@
       <div class="auth-brand"><div class="brand-mark">W</div><div><strong>DAA Pharmacy Hub</strong><span>Secure pharmacy workspace</span></div></div>
       <span class="auth-eyebrow">GOOGLE WORKSPACE ACCESS</span>
       <h1 id="authTitle">Sign in to your pharmacy workspace</h1>
-      <p id="authMessage">The Google account you sign in with is also the protected Gmail sender for prescription and pharmacy emails.</p>
+      <p id="authMessage">Sign in with any verified Google account. Each email has its own private pharmacy workspace and Gmail sender.</p>
       <a id="googleSignIn" class="auth-google-button" href="/api/auth/google">Continue with Google</a>
       <button id="authSignOut" class="ghost hidden" type="button">Sign out</button>
-      <div id="authTransferState" class="auth-transfer-state hidden"></div>
-      <p class="auth-note">Patient data stays hidden unless this account owns the pharmacy workspace or is completing an approved transfer.</p>
+      <p class="auth-note">A different Google email starts with an empty workspace. Connect that account to MyPak and run Full Sync to add its patient data.</p>
     </div>
   </section>
 
@@ -34,7 +33,7 @@
       <button class="nav" data-view="special">Special Orders / S8</button>
       <button class="nav" data-view="doctor">Doctor Updates</button>
       <button class="nav mobile-only-nav" data-view="import">Import Centre</button>
-      <button class="nav" data-view="settings">Settings & Audit</button>
+      <button class="nav" data-view="settings">Settings</button>
     </div>
     <div class="side-note">Live MyPak / MPS data · safe pharmacy workflow</div>
   </aside>
@@ -192,17 +191,56 @@
       <section class="panel"><div class="panel-head"><h2>Other pending doctor updates</h2><span>never auto-apply medicine changes</span></div><div id="doctorList" class="queue"></div></section>
     </section>
 
-    <section id="settings" class="view">
-      <section class="panel" id="mypakPanelSettings"><div class="panel-head"><div><h2>Data & MyPak account</h2><p class="muted">Connect directly with your normal MyPak website login, then download the complete read-only dataset.</p></div><span id="mypakConnectionSettings" class="mypak-connection">Checking connection…</span></div><div class="mypak-account-card"><form class="mypak-login-form mypak-login-row"><label class="field"><span>MyPak username</span><input name="username" type="text" autocomplete="username" placeholder="MyPak username" required></label><label class="field"><span>MyPak password</span><input name="password" type="password" autocomplete="current-password" placeholder="MyPak password" required></label><button type="submit">Connect & full sync</button><button class="ghost mypak-disconnect-btn" type="button" disabled>Disconnect</button></form><p class="secret-note">Your login is held only in backend memory and is removed on Disconnect or server restart. Previously synced patient and medication data stays available.</p></div><div class="toolbar"><button id="mypakSyncBtnSettings" type="button" disabled>Full sync now</button><span id="mypakSyncSummarySettings" class="mypak-sync-summary">No sync information available.</span></div><div class="three-col settings-imports"><form class="upload-card" data-import="patients"><h3>Patients</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="upload-card" data-import="medications"><h3>Medications</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="upload-card" data-import="scripts"><h3>Scripts</h3><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></section>
-      <section class="panel gmail-panel"><div class="panel-head"><div><h2>Signed-in Google account & email sender</h2><p class="muted">One account controls access to this workspace and sends every Gmail message. There is no separate sender connection.</p></div><span id="gmailStatus">Checking signed-in account…</span></div><div class="signed-account-grid"><div class="signed-account-card"><span>Current workspace owner and sender</span><b id="workspaceOwnerEmail">—</b><p id="gmailSetupHelp" class="secret-note"></p><div class="request-actions"><button id="gmailTest" type="button" class="ghost">Send test</button><button id="gmailRunNow" type="button" class="ghost">Run due emails now</button><button id="workspaceSignOut" type="button" class="danger-action">Sign out</button></div></div><form id="emailSettingsForm" class="recipient-settings"><label class="field"><span>Optional pharmacy copy recipient</span><input id="pharmacyEmail" name="pharmacyEmail" type="email" placeholder="pharmacy@example.com"></label><button type="submit">Save recipient</button><p class="secret-note">This address receives copies only. It never changes the signed-in sender.</p></form></div><div id="specialEmailLog" class="table-wrap"></div></section>
-      <section class="panel workspace-transfer-panel"><div class="panel-head"><div><h2>Transfer Data & Workspace Ownership</h2><p class="muted">Move the complete patient workspace and Gmail sender to a new verified Google account. Nothing is copied or deleted during verification.</p></div><span id="workspaceTransferBadge">No transfer pending</span></div><form id="workspaceTransferForm" class="workspace-transfer-form"><label class="field"><span>Current owner</span><input id="transferCurrentEmail" type="email" readonly></label><label class="field"><span>New owner Google email</span><input id="transferTargetEmail" name="targetEmail" type="email" placeholder="new-pharmacy@example.com" required></label><button type="submit">Email verification link</button></form><div id="workspaceTransferStatus" class="workspace-transfer-status">The new account will see no patient information until it verifies the invitation and you complete the transfer.</div><div class="request-actions"><button id="completeWorkspaceTransfer" type="button" disabled>Complete transfer</button><button id="cancelWorkspaceTransfer" class="danger-action" type="button" disabled>Cancel transfer</button></div></section>
-      <section class="panel"><div class="panel-head"><h2>Workflow settings</h2><span>default lead days and alert windows</span></div><form id="settingsForm" class="settings-grid"></form></section>
-      <section class="panel"><div class="panel-head"><h2>Audit trail</h2><span>who/what/when style log</span></div><div id="auditLog" class="table-wrap"></div></section>
+    <section id="settings" class="view settings-view">
+      <section class="settings-hero">
+        <div><span class="settings-eyebrow">WORKSPACE CONTROL CENTRE</span><h2>Everything important, without the clutter.</h2><p>Manage live pharmacy data, the signed-in Google workspace and operational timing from one clear page.</p></div>
+        <div class="settings-hero-account"><span>Active private workspace</span><b id="settingsHeroEmail">—</b><small>Patient data and connected services stay isolated to this Google account.</small></div>
+      </section>
+
+      <div class="settings-layout">
+        <nav class="settings-index" aria-label="Settings sections">
+          <span>Settings</span>
+          <a href="#settingsData"><b>Data & sync</b><small>MyPak and file imports</small></a>
+          <a href="#settingsAccount"><b>Account & email</b><small>Google workspace and sender</small></a>
+          <a href="#settingsWorkflow"><b>Workflow</b><small>Lead times and alert windows</small></a>
+        </nav>
+
+        <div class="settings-content">
+          <section id="settingsData" class="settings-section">
+            <div class="settings-section-copy"><span>01</span><h2>Data & sync</h2><p>MyPak is the primary source for patients, medication balances, prescriptions and pack activity.</p></div>
+            <div class="settings-surface" id="mypakPanelSettings">
+              <div class="settings-card-header"><div><span class="settings-kicker">PRIMARY DATA SOURCE</span><h3>MyPak connection</h3></div><span id="mypakConnectionSettings" class="mypak-connection">Checking connection…</span></div>
+              <div class="settings-mypak-card">
+                <form class="mypak-login-form mypak-login-row settings-mypak-form"><label class="field"><span>MyPak username</span><input name="username" type="text" autocomplete="username" placeholder="Enter username" required></label><label class="field"><span>MyPak password</span><input name="password" type="password" autocomplete="current-password" placeholder="Enter password" required></label><button type="submit">Connect & full sync</button><button class="ghost mypak-disconnect-btn" type="button" disabled>Disconnect</button></form>
+                <p class="secret-note">Credentials remain only in protected server memory and are removed on disconnect or restart.</p>
+              </div>
+              <div class="settings-sync-row"><div><b>Full clinical refresh</b><span id="mypakSyncSummarySettings" class="mypak-sync-summary">No sync information available.</span></div><button id="mypakSyncBtnSettings" type="button" disabled>Full sync now</button></div>
+              <details class="settings-disclosure"><summary><span><b>Manual file imports</b><small>Fallback tools for Patients, Medications and Scripts</small></span><em>Open</em></summary><div class="settings-import-grid"><form class="settings-import-card" data-import="patients"><div><span>01</span><h3>Patients</h3></div><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import patients</button></form><form class="settings-import-card" data-import="medications"><div><span>02</span><h3>Medications</h3></div><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import medications</button></form><form class="settings-import-card" data-import="scripts"><div><span>03</span><h3>Scripts</h3></div><input type="file" name="file" accept=".xlsx,.xls,.csv"><button>Import scripts</button></form></div></details>
+            </div>
+          </section>
+
+          <section id="settingsAccount" class="settings-section">
+            <div class="settings-section-copy"><span>02</span><h2>Account & email</h2><p>The signed-in Google account is both the private workspace identity and the Gmail sender.</p></div>
+            <div class="settings-surface">
+              <div class="settings-card-header"><div><span class="settings-kicker">GOOGLE WORKSPACE</span><h3>Account and sender</h3></div><span id="gmailStatus">Checking signed-in account…</span></div>
+              <div class="settings-account-row"><div class="settings-account-identity"><span class="settings-avatar" aria-hidden="true">G</span><div><small>Signed in and sending as</small><b id="workspaceOwnerEmail">—</b><p id="gmailSetupHelp" class="secret-note"></p></div></div><div class="settings-account-actions"><button id="gmailTest" type="button" class="ghost">Send test</button><button id="gmailRunNow" type="button" class="ghost">Run due emails</button><button id="workspaceSignOut" type="button" class="danger-action">Sign out</button></div></div>
+              <form id="emailSettingsForm" class="settings-recipient-form"><div><b>Pharmacy copy recipient</b><p>Optional copy address for pharmacy messages. It never changes the sender.</p></div><label class="field"><span>Email address</span><input id="pharmacyEmail" name="pharmacyEmail" type="email" placeholder="pharmacy@example.com"></label><button type="submit">Save email</button></form>
+              <div class="settings-switch-row"><div><b>Use another Google account</b><p>A new email starts empty. A returning email sees only its own saved data.</p></div><a id="workspaceSwitchAccount" class="ghost settings-switch-button" href="/api/auth/google">Sign in with another Google account</a></div>
+              <details class="settings-disclosure settings-email-history"><summary><span><b>Automatic email delivery history</b><small>Recent Special Order / S8 delivery results</small></span><em>Open</em></summary><div id="specialEmailLog" class="table-wrap"></div></details>
+            </div>
+          </section>
+
+          <section id="settingsWorkflow" class="settings-section">
+            <div class="settings-section-copy"><span>03</span><h2>Workflow</h2><p>Set the default timing used for pack preparation, dispensing, orders and prescription alerts.</p></div>
+            <div class="settings-surface"><div class="settings-card-header"><div><span class="settings-kicker">OPERATIONAL DEFAULTS</span><h3>Timing and alert windows</h3></div><span>Changes apply to future calculations</span></div><form id="settingsForm" class="settings-preferences-grid"></form></div>
+          </section>
+        </div>
+      </div>
     </section>
   </main>
 
   <dialog id="editDialog"><form method="dialog" id="editForm"><div class="dialog-head"><h2>Edit patient</h2><button value="cancel" class="ghost">×</button></div><div id="editFields" class="form-grid"></div><menu><button value="cancel" class="ghost">Cancel</button><button id="savePatientBtn" value="default">Save</button></menu></form></dialog>
   <div id="toast" class="toast hidden"></div>
-	  <script src="/app.js?v=20260719-google-workspace-mypak-login-v1"></script>
+	  <script src="/app.js?v=20260719-settings-redesign-v1"></script>
 </body>
 </html>

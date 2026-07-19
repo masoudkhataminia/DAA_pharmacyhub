@@ -123,6 +123,7 @@ assert.match(taggedPatientLetter, /Our client, Masoud Khataminia, receives month
 assert.doesNotMatch(taggedPatientLetter, /\(RDH\)/);
 
 const publicApp = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const publicIndex = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 assert.doesNotMatch(publicApp, /const noScript = Number\(m\.repeatsLeft\) <= 0/);
 assert.match(publicApp, /const noScript = m\.newScriptNeeded === true/);
 assert.match(publicApp, /repeats !== null && repeats < 2/);
@@ -137,6 +138,15 @@ assert.doesNotMatch(publicApp, /syncMyPakPatients\(\{silent:true\}\)/);
 assert.match(publicApp, /Medications, pill balance & scripts/);
 assert.doesNotMatch(publicApp, /<h3>Imported medication list<\/h3>/);
 assert.match(publicApp, /CLIENT_BUILD_VERSION/);
+assert.doesNotMatch(publicApp, /workspace\/transfer|WorkspaceTransfer|transfer_pending/);
+assert.match(publicIndex, /id="workspaceSwitchAccount"/);
+assert.match(publicIndex, /Sign in with another Google account/);
+assert.doesNotMatch(publicIndex, /Transfer Data|workspaceTransfer/);
+assert.match(publicIndex, /id="settingsData"/);
+assert.match(publicIndex, /id="settingsAccount"/);
+assert.match(publicIndex, /id="settingsWorkflow"/);
+assert.doesNotMatch(publicIndex, /Audit trail|id="auditLog"|Settings & Audit/);
+assert.doesNotMatch(publicApp, /#auditLog|Settings & Audit/);
 assert.match(publicApp, /q\.length < 2/);
 assert.match(publicApp, /Would you also like to email this prescription request to the patient\?/);
 assert.match(publicApp, /\/api\/script-request\/\$\{id\}\/email-patient/);
