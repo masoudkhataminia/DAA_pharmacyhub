@@ -6,7 +6,7 @@ import { mergeMyPakPatients, normalizeMyPakMedicationBalance } from '../services
 import { MyPakSyncService } from '../services/mypak/sync.js';
 import { buildPackImpact } from '../services/doctor-change/impact.js';
 import { mergePackJobs, normalizePackDose, packMedicationCells } from '../services/mypak/packs.js';
-import { analyseDoctorChange } from '../services/doctor-change/analysis.js';
+import { analyseDoctorChange, doctorChangeAiStatus } from '../services/doctor-change/analysis.js';
 
 const response = (status, body) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) });
 const settings = { defaultCycleDays: 14, weeklyDays: 7, fortnightlyDays: 14, monthlyDays: 28, defaultPackLeadDays: 3, defaultDispenseLeadDays: 1, defaultOrderLeadDays: 7 };
@@ -147,4 +147,20 @@ test('doctor AI request disables storage and requires structured pharmacist-revi
   const result=await analyseDoctorChange({patient:{fullName:'Test Patient'},medications:[],sourceText:'Stop example medicine',env:{OPENAI_API_KEY:'test-key',OPENAI_DOCTOR_CHANGE_MODEL:'test-model'},fetchImpl});
   const body=JSON.parse(request.options.body);
   assert.equal(body.store,false); assert.equal(body.text.format.type,'json_schema'); assert.equal(body.text.format.strict,true); assert.equal(result.documentSummary,'One change');
+  assert.doesNotMatch(body.input[0].content[0].text,/Test Patient/);
+});
+
+test('doctor PDF upload is normalized and sent as a high-detail Responses file input', async () => {
+  let request;
+  const fetchImpl=async(url,options)=>{request={url,options};return response(200,{output_text:JSON.stringify({documentSummary:'PDF read',changes:[],warnings:[]})});};
+  await analyseDoctorChange({patient:{fullName:'Private Patient'},medications:[],file:{originalname:'doctor-update.pdf',mimetype:'application/octet-stream',buffer:Buffer.from('%PDF-1.7 sample')},env:{OPENAI_API_KEY:'test-key'},fetchImpl});
+  const body=JSON.parse(request.options.body);const fileInput=body.input[0].content.find(item=>item.type==='input_file');
+  assert.equal(fileInput.filename,'doctor-update.pdf');assert.equal(fileInput.detail,'high');assert.match(fileInput.file_data,/^data:application\/pdf;base64,/);
+});
+
+test('doctor document validation blocks unsupported uploads before calling AI', async () => {
+  let called=false;
+  await assert.rejects(analyseDoctorChange({file:{originalname:'unsafe.exe',mimetype:'application/octet-stream',buffer:Buffer.from('x')},env:{OPENAI_API_KEY:'test-key'},fetchImpl:async()=>{called=true;}}),/Upload a PDF/);
+  assert.equal(called,false);
+  assert.deepEqual(doctorChangeAiStatus({}),{configured:false,model:'gpt-5-mini',maxFileSizeMb:15,acceptedFileTypes:['PDF','DOC','DOCX','RTF','TXT','JPG','PNG','WEBP']});
 });

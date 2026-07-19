@@ -7,7 +7,8 @@ let SMART_QUEUE = null;
 let selectedSmartPatientId = null;
 let SMART_PATIENT_DETAILS = null;
 let SMART_AI_STATUS = { configured:false };
-const CLIENT_BUILD_VERSION = '20260719-smart-patient-profile-preview-v1';
+let DOCTOR_AI_STATUS = { configured:false, maxFileSizeMb:15 };
+const CLIENT_BUILD_VERSION = '20260719-doctor-update-preview-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -708,7 +709,7 @@ function renderDoctor(){
   $('#doctorList').innerHTML = list.length ? list.map(u=>`<div class="queue-card"><div><h3>${esc(u.patientFullName)}</h3><p>${esc(u.changeType)} · ${esc(u.medicine)} · ${esc(u.effectiveFrom)}</p><div class="badges">${badge(u.status,'warn')}${u.risk?badge(u.risk,/urgent|current|immediate/i.test(u.risk)?'danger':'blue'):''}</div></div><button class="ghost" onclick="markDoctor('${u.id}','Applied / closed')">Close</button></div>`).join('') : empty('No pending doctor updates.');
   $('#doctorForm').innerHTML = `<div class="field full"><label>Patient</label><select name="patientId">${STATE.patientsComputed.map(p=>`<option value="${p.id}">${esc(p.fullName)}</option>`).join('')}</select></div>${fieldHTML('receivedDate','Received date','date','')}${fieldHTML('source','Source','text','Doctor letter')}${fieldHTML('changeType','Change type','select:Add medicine|Stop medicine|Dose increase|Dose decrease|Direction changed|Timing changed|Temporary course|Clarification','')}${fieldHTML('medicine','Medicine','text','')}${fieldHTML('oldDirection','Old direction','text','')}${fieldHTML('newDirection','New direction','text','')}${fieldHTML('effectiveFrom','Effective from','select:Needs review|Immediately|Current pack|Next pack|Specific date|Waiting for script|Waiting for clarification','')}${fieldHTML('risk','Risk','select:Routine|Urgent|Affects current pack|S8/S4D|Waiting for script','')}${fieldHTML('notes','Notes','textarea','')}<div class="field full"><button>Add pending update</button></div>`;
   const patientSelect=$('#doctorAiPatient');
-  if(patientSelect){const selected=patientSelect.value;patientSelect.innerHTML=(STATE.patientsComputed||[]).filter(p=>p.mypakPatientId).map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(p.fullName)} · MyPak</option>`).join('');if(!activeDoctorAnalysisId&&patientSelect.value)loadPatientPackSnapshot(patientSelect.value);}
+  if(patientSelect){const selected=patientSelect.value;patientSelect.innerHTML=(STATE.patientsComputed||[]).filter(p=>p.mypakPatientId).map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(p.fullName)} · MyPak</option>`).join('');if(!activeDoctorAnalysisId&&patientSelect.value)loadPatientPackSnapshot(patientSelect.value);updateDoctorInputStatus();}
   const analyses=STATE.doctorChangeAnalyses||[];
   $('#doctorAnalysisList').innerHTML=analyses.length?analyses.slice(0,60).map(a=>`<div class="queue-card ${a.id===activeDoctorAnalysisId?'selected-card':''}"><div><h3>${esc(a.patientFullName)}</h3><p>${esc(a.sourceName)} · ${(a.changes||[]).length} proposed change(s)</p><div class="badges">${badge(a.status,a.status==='Approved for pack worksheet'?'ok':'warn')} ${a.packImpactUpdatedAt?badge('Pack data refreshed','mint'):''}</div></div><button class="ghost" onclick="openDoctorAnalysis('${a.id}')">Open</button></div>`).join(''):empty('No AI doctor-change analyses yet.');
   if(activeDoctorAnalysisId&&!analyses.some(a=>a.id===activeDoctorAnalysisId))activeDoctorAnalysisId=null;
@@ -717,8 +718,31 @@ function renderDoctor(){
 }
 async function refreshDoctorAiStatus(){
   const label=$('#doctorAiStatus');if(!label)return;
-  try{const status=await api('/api/doctor-change/ai-status');label.textContent=status.configured?`AI ready · ${status.model} · pharmacist approval required`:'AI not configured · manual entry remains available';label.className=status.configured?'ai-ready':'ai-offline';$('#doctorAnalyseBtn').disabled=!status.configured;}
-  catch(error){label.textContent=error.message;}
+  try{DOCTOR_AI_STATUS=await api('/api/doctor-change/ai-status');label.textContent=DOCTOR_AI_STATUS.configured?`AI ready · ${DOCTOR_AI_STATUS.model} · pharmacist approval required`:'AI connection required · typing and upload are available';label.className=DOCTOR_AI_STATUS.configured?'ai-ready':'ai-offline';updateDoctorInputStatus();}
+  catch(error){DOCTOR_AI_STATUS={configured:false,maxFileSizeMb:15};label.textContent=error.message;updateDoctorInputStatus({message:'AI status could not be checked. Your typed text and selected file have been preserved.',level:'error'});}
+}
+function doctorInputState(){
+  const text=String($('#doctorSourceText')?.value||'');
+  const file=$('#doctorSourceFile')?.files?.[0]||null;
+  const extension=file?.name?.toLowerCase().match(/\.[a-z0-9]+$/)?.[0]||'';
+  const allowed=['.pdf','.doc','.docx','.txt','.rtf','.jpg','.jpeg','.png','.webp'];
+  const maxBytes=Number(DOCTOR_AI_STATUS.maxFileSizeMb||15)*1024*1024;
+  return {text,file,hasPatient:Boolean($('#doctorAiPatient')?.value),hasSource:Boolean(text.trim()||file),fileSupported:!file||allowed.includes(extension),fileWithinLimit:!file||file.size<=maxBytes,maxBytes};
+}
+function updateDoctorInputStatus(override={}){
+  const state=doctorInputState();
+  const count=$('#doctorTextCount');if(count)count.textContent=`${state.text.length.toLocaleString('en-AU')} / 30,000 characters`;
+  const fileName=$('#doctorFileName');if(fileName){const size=state.file?(state.file.size<1024*1024?`${Math.max(1,Math.round(state.file.size/1024))} KB`:`${(state.file.size/1024/1024).toFixed(2)} MB`):'';fileName.textContent=state.file?`${state.file.name} · ${size}`:'PDF, Word, RTF, TXT or image · maximum 15 MB';}
+  let message='Type or paste the doctor update, or choose a document.';let level='neutral';
+  if(!state.hasPatient){message='No MyPak patient is available. Sync or import patients first.';level='error';}
+  else if(!state.fileSupported){message='Unsupported file. Choose PDF, Word, RTF, TXT, JPG, PNG or WEBP.';level='error';}
+  else if(!state.fileWithinLimit){message='This document is larger than 15 MB. Choose a smaller file.';level='error';}
+  else if(state.hasSource&&!DOCTOR_AI_STATUS.configured){message='Your text or document is ready. The secure AI connection must be enabled on the server before analysis.';level='warning';}
+  else if(state.hasSource){message=`Ready for protected AI analysis${state.file?` · ${state.file.name}`:''}.`;level='ready';}
+  if(override.message){message=override.message;level=override.level||level;}
+  const status=$('#doctorInputStatus');if(status){status.textContent=message;status.className=`doctor-input-status ${level}`;}
+  const button=$('#doctorAnalyseBtn');if(button)button.disabled=button.dataset.busy==='1'||!state.hasPatient||!state.hasSource||!state.fileSupported||!state.fileWithinLimit||!DOCTOR_AI_STATUS.configured;
+  return {...state,ready:state.hasPatient&&state.hasSource&&state.fileSupported&&state.fileWithinLimit&&DOCTOR_AI_STATUS.configured};
 }
 async function loadPatientPackSnapshot(patientId){
   const box=$('#patientPackSnapshot');if(!box||!patientId)return;
@@ -746,9 +770,10 @@ async function saveDoctorAnalysis(id,refreshPacks){
   try{await api(`/api/doctor-change/analyses/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({changes,status:approved?'Approved for pack worksheet':'Pending pharmacist review'})});if(refreshPacks){toast('Reading exact pack contents from MyPak…');await api(`/api/doctor-change/analyses/${id}/pack-impact`,{method:'POST'});}await loadState();activeDoctorAnalysisId=id;renderDoctor();toast(refreshPacks?'Affected packs and compartments refreshed.':'Pharmacist review saved.');}catch(error){toast(error.message);}
 }
 async function doctorAiSubmit(event){
-  event.preventDefault();const form=event.currentTarget;const button=$('#doctorAnalyseBtn');button.disabled=true;button.textContent='Analysing safely…';
-  try{const result=await api('/api/doctor-change/analyse',{method:'POST',body:new FormData(form)});activeDoctorAnalysisId=result.id;await loadState();await api(`/api/doctor-change/analyses/${result.id}/pack-impact`,{method:'POST'});await loadState();activeDoctorAnalysisId=result.id;renderDoctor();toast('Draft changes extracted. Review every line before approval.');}
-  catch(error){toast(error.message);}finally{button.textContent='Analyse medication changes';await refreshDoctorAiStatus();}
+  event.preventDefault();const form=event.currentTarget;const button=$('#doctorAnalyseBtn');const input=updateDoctorInputStatus();if(!input.ready)return;
+  let finalStatus={};button.dataset.busy='1';button.disabled=true;button.textContent='Analysing safely…';updateDoctorInputStatus({message:'Reading the supplied update and comparing it with the selected medication profile…',level:'working'});
+  try{const result=await api('/api/doctor-change/analyse',{method:'POST',body:new FormData(form)});activeDoctorAnalysisId=result.id;await loadState();await api(`/api/doctor-change/analyses/${result.id}/pack-impact`,{method:'POST'});await loadState();activeDoctorAnalysisId=result.id;renderDoctor();form.reset();finalStatus={message:'Draft changes extracted. Review and approve or reject every line below.',level:'ready'};toast('Draft changes extracted. Review every line before approval.');}
+  catch(error){finalStatus={message:error.message,level:'error'};toast(error.message);}finally{delete button.dataset.busy;button.textContent='Analyse medication changes';updateDoctorInputStatus(finalStatus);}
 }
 async function markDoctor(id,status){ await api(`/api/doctor-updates/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}); toast('Doctor update closed.'); await loadState(); }
 function renderSettings(){
@@ -845,7 +870,9 @@ $('#smartScriptForm').addEventListener('submit',runSmartScriptForecast);
 $('#savePatientBtn').addEventListener('click',savePatient);
 $('#doctorForm').addEventListener('submit',doctorSubmit);
 $('#doctorAiForm').addEventListener('submit',doctorAiSubmit);
-$('#doctorAiPatient').addEventListener('change',event=>loadPatientPackSnapshot(event.target.value));
+$('#doctorAiPatient').addEventListener('change',event=>{loadPatientPackSnapshot(event.target.value);updateDoctorInputStatus();});
+$('#doctorSourceText').addEventListener('input',()=>updateDoctorInputStatus());
+$('#doctorSourceFile').addEventListener('change',()=>updateDoctorInputStatus());
 $('#specialOrderForm').addEventListener('submit',specialOrderSubmit);
 $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFilter').addEventListener('change',renderSpecialOrders);
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
