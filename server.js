@@ -1535,17 +1535,19 @@ app.get('/api/patients/:id/pack-jobs', async (req, res) => {
 
 app.get('/api/doctor-change/ai-status', (_, res) => res.json(doctorChangeAiStatus()));
 app.post('/api/doctor-change/analyse', upload.single('file'), async (req, res) => {
-  try {
-    const store = readStore(); const patient = store.patients.find(item => item.id === req.body.patientId);
-    if (!patient) return res.status(404).json({ error: 'Patient not found' });
-    if (req.file && req.file.size > 15 * 1024 * 1024) return res.status(413).json({ error: 'Doctor document must be 15 MB or smaller.' });
-    const medications = (store.mypakMedicationBalances || []).filter(item => String(item.patientId) === String(patient.mypakPatientId));
-    const result = await analyseDoctorChange({ patient, medications, sourceText: req.body.sourceText, file: req.file });
-    const analysis = { id: id(), patientId: patient.id, patientFullName: patient.fullName, sourceName: cleanText(req.file?.originalname || req.body.sourceName || 'Pasted doctor email'), sourceText: String(req.body.sourceText || '').slice(0, 30000), documentSummary: cleanText(result.documentSummary), warnings: result.warnings || [], changes: (result.changes || []).map(change => ({ ...change, id: id(), pharmacistDecision: 'Pending' })), status: 'Pending pharmacist review', createdAt: nowISO(), packImpact: [] };
-    store.doctorChangeAnalyses.unshift(analysis); store.doctorChangeAnalyses = store.doctorChangeAnalyses.slice(0, 300);
-    audit(store, 'AI proposed doctor medication changes', { patient: patient.fullName, source: analysis.sourceName, changes: analysis.changes.length, status: analysis.status });
-    writeStore(store); res.json(analysis);
-  } catch (error) { res.status(error.status || 500).json({ error: error.message || 'Doctor document analysis failed' }); }
+  return workspaceContext.run({ email:req.workspaceAccount?.email }, async () => {
+    try {
+      const store = readStore(); const patient = store.patients.find(item => item.id === req.body.patientId);
+      if (!patient) return res.status(404).json({ error: 'Patient not found' });
+      if (req.file && req.file.size > 15 * 1024 * 1024) return res.status(413).json({ error: 'Doctor document must be 15 MB or smaller.' });
+      const medications = (store.mypakMedicationBalances || []).filter(item => String(item.patientId) === String(patient.mypakPatientId));
+      const result = await analyseDoctorChange({ patient, medications, sourceText: req.body.sourceText, file: req.file });
+      const analysis = { id: id(), patientId: patient.id, patientFullName: patient.fullName, sourceName: cleanText(req.file?.originalname || req.body.sourceName || 'Pasted doctor email'), sourceText: String(req.body.sourceText || '').slice(0, 30000), documentSummary: cleanText(result.documentSummary), warnings: result.warnings || [], changes: (result.changes || []).map(change => ({ ...change, id: id(), pharmacistDecision: 'Pending' })), status: 'Pending pharmacist review', createdAt: nowISO(), packImpact: [] };
+      store.doctorChangeAnalyses.unshift(analysis); store.doctorChangeAnalyses = store.doctorChangeAnalyses.slice(0, 300);
+      audit(store, 'AI proposed doctor medication changes', { patient: patient.fullName, source: analysis.sourceName, changes: analysis.changes.length, status: analysis.status });
+      writeStore(store); res.json(analysis);
+    } catch (error) { res.status(error.status || 500).json({ error: error.message || 'Doctor document analysis failed' }); }
+  });
 });
 
 app.patch('/api/doctor-change/analyses/:id', (req, res) => {
