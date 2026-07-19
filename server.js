@@ -20,12 +20,19 @@ import { publicMpsError } from './services/mps/errors.js';
 import { mergeMpsPatients } from './services/mps/mapper.js';
 import { mapOfflineMpsPatients } from './services/mps/offline.js';
 import { GmailService, validEmail } from './services/gmail.js';
+import { cookieValue, createWorkspaceSession, createWorkspaceTransfer, normalizeAccountEmail, verifyWorkspaceSession, workspaceSetupTokenMatches, workspaceTransferPublic, workspaceTransferTokenMatches } from './services/workspace-auth.js';
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const DATA_FILE = path.join(__dirname, 'data', 'store.json');
 const GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-token.enc');
+const PENDING_GMAIL_TOKEN_FILE = path.join(__dirname, 'data', 'gmail-transfer-pending.enc');
+const SESSION_COOKIE = 'daa_workspace_session';
+const SETUP_COOKIE = 'daa_workspace_setup';
+const SESSION_SECRET = process.env.APP_SESSION_SECRET || process.env.GMAIL_TOKEN_KEY || '';
+const WORKSPACE_SETUP_TOKEN = String(process.env.WORKSPACE_SETUP_TOKEN || '');
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || 'https://daa.mypharmacyhub.net').replace(/\/+$/, '');
 const PORT = process.env.PORT || 3000;
-const APP_BUILD_VERSION = '20260719-doctor-patient-search-preview-v1';
+const APP_BUILD_VERSION = '20260719-google-workspace-mypak-login-v1';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
@@ -44,6 +51,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 const DEFAULT_STORE = {
   version: 235,
+  workspace: { ownerEmail: '', pendingTransfer: null },
   settings: {
     defaultCycleDays: 14,
     weeklyDays: 7,
@@ -165,7 +173,7 @@ function dateDisplay(v) { const d = parseDate(v); return d ? formatAU(d) : ''; }
 function readStore() {
   if (!fs.existsSync(DATA_FILE)) writeStore(clone(DEFAULT_STORE));
   const s = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  return { ...clone(DEFAULT_STORE), ...s, settings: { ...DEFAULT_STORE.settings, ...(s.settings || {}) } };
+  return { ...clone(DEFAULT_STORE), ...s, workspace: { ...DEFAULT_STORE.workspace, ...(s.workspace || {}) }, settings: { ...DEFAULT_STORE.settings, ...(s.settings || {}) } };
 }
 function writeStore(store) { fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2)); }
 function audit(store, action, details = {}) {
@@ -173,12 +181,142 @@ function audit(store, action, details = {}) {
   store.auditLog = store.auditLog.slice(0, 1500);
 }
 
-const mypakClient = new MyPakClient();
+const mypakRuntimeEnv = { ...process.env, MYPAK_AUTHORIZATION: '', MYPAK_USERNAME: '', MYPAK_PASSWORD: '' };
+const mypakClient = new MyPakClient({ env: mypakRuntimeEnv });
 const mypakSyncService = new MyPakSyncService({ client: mypakClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
 const mpsClient = new MpsClient();
 const mpsSyncService = new MpsSyncService({ client: mpsClient, readStore, writeStore, pageSize: 200, maxPages: 100 });
 const gmailService = new GmailService({ clientId: process.env.GMAIL_CLIENT_ID, clientSecret: process.env.GMAIL_CLIENT_SECRET, redirectUri: process.env.GMAIL_REDIRECT_URI || 'https://daa.mypharmacyhub.net/api/gmail/callback', tokenFile: GMAIL_TOKEN_FILE, encryptionKey: process.env.GMAIL_TOKEN_KEY });
+const pendingGmailService = new GmailService({ clientId: process.env.GMAIL_CLIENT_ID, clientSecret: process.env.GMAIL_CLIENT_SECRET, redirectUri: process.env.GMAIL_REDIRECT_URI || 'https://daa.mypharmacyhub.net/api/gmail/callback', tokenFile: PENDING_GMAIL_TOKEN_FILE, encryptionKey: process.env.GMAIL_TOKEN_KEY });
 const gmailOAuthStates = new Map();
+
+function workspaceOwnerEmail(store = readStore()) {
+  return normalizeAccountEmail(store.workspace?.ownerEmail || process.env.WORKSPACE_OWNER_EMAIL);
+}
+
+function workspaceSession(req) {
+  return verifyWorkspaceSession(cookieValue(req.headers.cookie, SESSION_COOKIE), SESSION_SECRET);
+}
+
+function setWorkspaceSession(res, email) {
+  const value = createWorkspaceSession(email, SESSION_SECRET);
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200${secure}`);
+}
+
+function clearWorkspaceSession(res) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+}
+
+function workspaceSetupReady(req, store = readStore()) {
+  return !workspaceOwnerEmail(store) && workspaceSetupTokenMatches(WORKSPACE_SETUP_TOKEN, cookieValue(req.headers.cookie, SETUP_COOKIE));
+}
+
+function setWorkspaceSetupCookie(res) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SETUP_COOKIE}=${encodeURIComponent(WORKSPACE_SETUP_TOKEN)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${secure}`);
+}
+
+function workspaceAuthStatus(req) {
+  const store = readStore();
+  const ownerEmail = workspaceOwnerEmail(store);
+  const session = workspaceSession(req);
+  const email = normalizeAccountEmail(session?.email);
+  const pending = store.workspace?.pendingTransfer;
+  const role = email && email === ownerEmail
+    ? 'owner'
+    : email && pending?.verifiedAt && email === normalizeAccountEmail(pending.targetEmail)
+      ? 'transfer_pending'
+      : 'none';
+  const gmail = gmailService.status();
+  const senderEmail = normalizeAccountEmail(gmail.emailAddress);
+  const oauthConfigured = gmailService.configured();
+  const configured = Boolean(oauthConfigured && SESSION_SECRET && ownerEmail);
+  return {
+    configured,
+    oauthConfigured,
+    ownerConfigured: Boolean(ownerEmail),
+    sessionSecretConfigured: Boolean(SESSION_SECRET),
+    signedIn: Boolean(email),
+    authenticated: role === 'owner',
+    role,
+    email: role === 'owner' || role === 'transfer_pending' ? email : '',
+    senderConnected: role === 'owner' && gmail.connected && senderEmail === email,
+    senderEmail: role === 'owner' && senderEmail === email ? senderEmail : '',
+    ownerSetupReady: Boolean(oauthConfigured && SESSION_SECRET && workspaceSetupReady(req, store)),
+    transfer: workspaceTransferPublic(pending, email)
+  };
+}
+
+function requireWorkspaceOwner(req, res, next) {
+  const status = workspaceAuthStatus(req);
+  if (!status.configured) return res.status(503).json({ error: 'Google workspace sign-in is not configured on this server.' });
+  if (!status.authenticated) return res.status(401).json({ error: 'Sign in with the pharmacy owner Google account.' });
+  req.workspaceAccount = { email: status.email };
+  next();
+}
+
+app.get('/api/auth/status', (req, res) => res.json(workspaceAuthStatus(req)));
+app.post('/api/auth/setup', (req, res) => {
+  const store = readStore();
+  if (workspaceOwnerEmail(store)) return res.status(409).json({ error: 'The pharmacy workspace already has an owner.' });
+  if (!gmailService.configured() || !SESSION_SECRET || !WORKSPACE_SETUP_TOKEN) return res.status(503).json({ error: 'Secure workspace setup is not configured on this server.' });
+  const token = String(req.body?.token || '').slice(0, 512);
+  if (!workspaceSetupTokenMatches(WORKSPACE_SETUP_TOKEN, token)) return res.status(403).json({ error: 'This secure workspace setup link is invalid.' });
+  setWorkspaceSetupCookie(res);
+  res.json({ ok: true });
+});
+app.get('/api/auth/google', (req, res) => {
+  try {
+    const store = readStore();
+    const setupOwner = workspaceSetupReady(req, store);
+    if (!gmailService.configured() || !SESSION_SECRET || (!workspaceOwnerEmail(store) && !setupOwner)) return res.status(503).type('text').send('Google workspace sign-in is not configured on this server.');
+    const transferToken = String(req.query.transfer || '').slice(0, 256);
+    if (transferToken && !workspaceTransferTokenMatches(store.workspace?.pendingTransfer, transferToken)) return res.status(400).type('text').send('This workspace transfer link is invalid or expired.');
+    const state = crypto.randomBytes(24).toString('hex');
+    gmailOAuthStates.set(state, { expiresAt: Date.now() + 10 * 60 * 1000, transferToken, setupOwner });
+    res.redirect(gmailService.authorizationUrl(state));
+  } catch (error) { res.status(503).type('text').send(cleanText(error.message)); }
+});
+app.get('/api/gmail/callback', async (req, res) => {
+  const state = gmailOAuthStates.get(String(req.query.state || ''));
+  gmailOAuthStates.delete(String(req.query.state || ''));
+  if (!state?.expiresAt || state.expiresAt < Date.now()) return res.status(400).type('text').send('Google sign-in expired or was not started from this portal.');
+  if (req.query.error) return res.redirect('/?auth=denied');
+  try {
+    const tokens = await gmailService.exchangeCode(cleanText(req.query.code), { persist: false });
+    const email = normalizeAccountEmail(tokens.emailAddress);
+    const store = readStore();
+    const ownerEmail = workspaceOwnerEmail(store);
+    const pending = store.workspace?.pendingTransfer;
+    if (state.setupOwner) {
+      if (ownerEmail) throw new Error('The pharmacy workspace owner was already created. Sign in normally.');
+      store.workspace = { ...(store.workspace || {}), ownerEmail: email, pendingTransfer: null };
+      gmailService.writeTokens(tokens);
+      audit(store, 'Secured existing workspace with initial Google owner', { ownerEmail: email });
+      writeStore(store);
+      setWorkspaceSession(res, email);
+      return res.redirect('/?auth=owner-created');
+    }
+    if (state.transferToken) {
+      if (!workspaceTransferTokenMatches(pending, state.transferToken) || email !== normalizeAccountEmail(pending?.targetEmail)) throw new Error('Sign in with the exact new Google account named in the transfer invitation.');
+      pendingGmailService.writeTokens(tokens);
+      pending.verifiedAt = nowISO();
+      audit(store, 'Verified new Google account for workspace transfer', { fromEmail: ownerEmail, targetEmail: email });
+      writeStore(store);
+      setWorkspaceSession(res, email);
+      return res.redirect('/?auth=transfer-verified');
+    }
+    if (email !== ownerEmail) throw new Error('This Google account does not own the pharmacy workspace. Ask the current owner to start a data transfer first.');
+    gmailService.writeTokens(tokens);
+    setWorkspaceSession(res, email);
+    res.redirect('/?auth=signed-in');
+  } catch (error) { res.status(403).type('text').send(`Google sign-in failed: ${cleanText(error.message)}`); }
+});
+app.post('/api/auth/logout', (_, res) => { clearWorkspaceSession(res); res.json({ ok: true }); });
+
+app.use('/api', requireWorkspaceOwner);
 
 async function refreshPatientPackJobs(store, patient) {
   if (!patient?.mypakPatientId) return [];
@@ -1157,7 +1295,36 @@ function importPatients(buffer, filename) {
 app.get('/api/state', (_, res) => res.json(buildState(readStore())));
 app.get('/api/mypak/status', (_, res) => {
   const sync = readStore().mypakSync || {};
-  res.json({ configured: mypakClient.isConfigured(), authenticated: Boolean(mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt), baseUrl: mypakClient.baseUrl, lastSuccessfulRequestAt: mypakClient.lastSuccessfulRequestAt || sync.lastSuccessAt || null, lastSyncAt: sync.lastSyncAt || null, lastError: sync.lastError || null, patientCount: sync.totalPatients || 0, packJobCount: sync.totalPackJobs || 0 });
+  const configured = mypakClient.isConfigured();
+  res.json({ configured, connected: Boolean(configured && mypakClient.lastSuccessfulRequestAt), authenticated: Boolean(configured && mypakClient.lastSuccessfulRequestAt), hasSavedData: Boolean(sync.lastSuccessAt), baseUrl: mypakClient.baseUrl, lastSuccessfulRequestAt: mypakClient.lastSuccessfulRequestAt || null, lastSyncAt: sync.lastSyncAt || null, lastError: sync.lastError || null, patientCount: sync.totalPatients || 0, medicationBalanceCount: sync.totalMedicationBalances || 0, prescriptionCount: sync.totalPrescriptions || 0, doctorCount: sync.totalDoctors || 0, dispenseHistoryCount: sync.totalDispenseHistory || 0, packJobCount: sync.totalPackJobs || 0 });
+});
+app.post('/api/mypak/session', async (req, res) => {
+  try {
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '');
+    mypakClient.configureCredentials(username, password);
+    if (req.body) req.body.password = '';
+    await mypakClient.reportOptions();
+    const store = readStore();
+    audit(store, 'Connected MyPak account and started full sync', { accountConfigured: true, by: req.workspaceAccount?.email || '' });
+    writeStore(store);
+    const fullSync = mypakSyncService.syncAll();
+    fullSync.catch(() => {});
+    res.status(202).json({ ok: true, connected: true, fullSyncStarted: true, sync: mypakSyncService.getStatus() });
+  } catch (error) {
+    if (req.body) req.body.password = '';
+    mypakClient.disconnect();
+    sendMyPakError(res, error);
+  }
+});
+app.post('/api/mypak/disconnect', (req, res) => {
+  if (mypakSyncService.getStatus().running) return res.status(409).json({ error: 'Wait for the current full MyPak sync to finish before disconnecting.' });
+  mypakClient.disconnect();
+  const store = readStore();
+  store.mypakSync = { ...(store.mypakSync || {}), disconnectedAt: nowISO() };
+  audit(store, 'Disconnected MyPak live account', { savedDataPreserved: true, by: req.workspaceAccount?.email || '' });
+  writeStore(store);
+  res.json({ ok: true, connected: false, savedDataPreserved: true });
 });
 app.post('/api/mypak/test', async (_, res) => { try { await mypakClient.reportOptions(); res.json({ ok: true, authenticated: true }); } catch (error) { sendMyPakError(res, error); } });
 app.get('/api/mypak/patients', async (req, res) => {
@@ -1262,25 +1429,63 @@ app.post('/api/mps/import/patients', upload.single('file'), (req, res) => {
 app.patch('/api/dispense-workflow/:key', (req, res) => { const allowed = ['needs_dispense','dispensed','confirmed']; const status = cleanText(req.body.status); if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid dispense status' }); const store = readStore(); store.dispenseWorkflow[req.params.key] = { status, updatedAt: nowISO() }; audit(store, 'Updated dispense workflow', { key: req.params.key, status }); writeStore(store); res.json(store.dispenseWorkflow[req.params.key]); });
 app.get('/api/export/store', (_, res) => res.download(DATA_FILE, `webster-pack-backup-${toISODate(todayDate())}.json`));
 app.post('/api/reset', (req, res) => { const store = clone(DEFAULT_STORE); audit(store, 'Reset store', { reason: req.body?.reason || 'manual reset' }); writeStore(store); res.json({ ok: true }); });
-app.get('/api/gmail/status', (_, res) => res.json(gmailService.status()));
-app.get('/api/gmail/connect', (req, res) => {
-  try {
-    const state = crypto.randomBytes(24).toString('hex');
-    gmailOAuthStates.set(state, Date.now() + 10 * 60 * 1000);
-    res.redirect(gmailService.authorizationUrl(state));
-  } catch (error) { res.status(503).send(htmlEsc(error.message)); }
+app.get('/api/gmail/status', (req, res) => {
+  const gmail = gmailService.status();
+  const signedInEmail = normalizeAccountEmail(req.workspaceAccount?.email);
+  const senderEmail = normalizeAccountEmail(gmail.emailAddress);
+  res.json({ configured: gmail.configured, connected: gmail.connected && senderEmail === signedInEmail, emailAddress: senderEmail === signedInEmail ? senderEmail : '', redirectUri: gmail.redirectUri });
 });
-app.get('/api/gmail/callback', async (req, res) => {
-  const expiresAt = gmailOAuthStates.get(String(req.query.state || ''));
-  gmailOAuthStates.delete(String(req.query.state || ''));
-  if (!expiresAt || expiresAt < Date.now()) return res.status(400).send('Gmail connection expired or was not started from this portal.');
-  if (req.query.error) return res.redirect('/?gmail=denied#settings');
+app.get('/api/gmail/connect', (_, res) => res.redirect('/api/auth/google'));
+app.post('/api/gmail/disconnect', (_, res) => res.status(410).json({ error: 'The signed-in Google account is the email sender. Use Sign out instead.' }));
+app.post('/api/workspace/transfer', async (req, res) => {
   try {
-    await gmailService.exchangeCode(cleanText(req.query.code));
-    res.redirect('/?gmail=connected#settings');
-  } catch (error) { res.status(400).send(`Gmail connection failed: ${htmlEsc(error.message)}`); }
+    const store = readStore();
+    const ownerEmail = workspaceOwnerEmail(store);
+    const targetEmail = normalizeAccountEmail(req.body?.targetEmail);
+    const gmail = gmailService.status();
+    if (!gmail.connected || normalizeAccountEmail(gmail.emailAddress) !== ownerEmail) return res.status(409).json({ error: 'Sign in again with the current owner Google account before transferring the workspace.' });
+    const { token, transfer } = createWorkspaceTransfer(ownerEmail, targetEmail);
+    const acceptUrl = `${PUBLIC_BASE_URL}/api/auth/google?transfer=${encodeURIComponent(token)}`;
+    await gmailService.send({
+      to: targetEmail,
+      subject: 'DAA Pharmacy Hub workspace transfer',
+      html: `<p>The current DAA Pharmacy Hub owner has invited <b>${htmlEsc(targetEmail)}</b> to take ownership of the pharmacy workspace.</p><p><a href="${acceptUrl}">Verify this Google account</a></p><p>Sign in with exactly ${htmlEsc(targetEmail)}. Patient data remains hidden until the current owner completes the transfer. This link expires in 48 hours.</p>`
+    });
+    pendingGmailService.clear();
+    store.workspace = { ...(store.workspace || {}), ownerEmail, pendingTransfer: transfer };
+    audit(store, 'Started pharmacy workspace transfer', { fromEmail: ownerEmail, targetEmail, expiresAt: transfer.expiresAt });
+    writeStore(store);
+    res.json({ ok: true, inviteSent: true, transfer: workspaceTransferPublic(transfer, ownerEmail) });
+  } catch (error) { res.status(400).json({ error: cleanText(error.message || 'Workspace transfer could not be started') }); }
 });
-app.post('/api/gmail/disconnect', (_, res) => { gmailService.clear(); res.json(gmailService.status()); });
+app.post('/api/workspace/transfer/complete', (req, res) => {
+  try {
+    const store = readStore();
+    const ownerEmail = workspaceOwnerEmail(store);
+    const transfer = store.workspace?.pendingTransfer;
+    if (!transfer || normalizeAccountEmail(transfer.fromEmail) !== ownerEmail) return res.status(404).json({ error: 'No workspace transfer is waiting.' });
+    if (!transfer.verifiedAt || Date.parse(transfer.expiresAt || '') <= Date.now()) return res.status(409).json({ error: 'The new Google account must verify the invitation before transfer.' });
+    const pendingTokens = pendingGmailService.readTokens();
+    const targetEmail = normalizeAccountEmail(transfer.targetEmail);
+    if (!pendingTokens?.refreshToken || normalizeAccountEmail(pendingTokens.emailAddress) !== targetEmail) return res.status(409).json({ error: 'The verified new sender token is missing. Ask the new account to open the invitation again.' });
+    gmailService.writeTokens(pendingTokens);
+    pendingGmailService.clear();
+    store.workspace = { ownerEmail: targetEmail, pendingTransfer: null };
+    audit(store, 'Transferred pharmacy workspace ownership', { fromEmail: ownerEmail, targetEmail, senderTransferred: true });
+    writeStore(store);
+    res.json({ ok: true, ownerEmail: targetEmail, senderTransferred: true });
+  } catch (error) { res.status(400).json({ error: cleanText(error.message || 'Workspace transfer could not be completed') }); }
+});
+app.delete('/api/workspace/transfer', (req, res) => {
+  const store = readStore();
+  const transfer = store.workspace?.pendingTransfer;
+  if (!transfer) return res.json({ ok: true });
+  audit(store, 'Cancelled pharmacy workspace transfer', { fromEmail: workspaceOwnerEmail(store), targetEmail: normalizeAccountEmail(transfer.targetEmail) });
+  store.workspace = { ...(store.workspace || {}), ownerEmail: workspaceOwnerEmail(store), pendingTransfer: null };
+  pendingGmailService.clear();
+  writeStore(store);
+  res.json({ ok: true });
+});
 app.post('/api/gmail/test', async (req, res) => {
   try {
     const store = readStore();

@@ -1,6 +1,7 @@
 let STATE = null;
 let selectedPatientId = null;
 let editPatientId = null;
+let MYPAK_CONNECTION = null;
 let MPS_CONNECTION = null;
 let activeDoctorAnalysisId = null;
 let SMART_QUEUE = null;
@@ -8,14 +9,15 @@ let selectedSmartPatientId = null;
 let SMART_PATIENT_DETAILS = null;
 let SMART_AI_STATUS = { configured:false };
 let DOCTOR_AI_STATUS = { configured:false, maxFileSizeMb:15 };
-const CLIENT_BUILD_VERSION = '20260719-doctor-patient-search-preview-v1';
+let AUTH_STATE = null;
+const CLIENT_BUILD_VERSION = '20260719-google-workspace-mypak-login-v1';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const badge = (text, cls='') => `<span class="badge ${cls}">${esc(text)}</span>`;
 const toast = msg => { const t=$('#toast'); t.textContent=msg; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'), 4200); };
-const api = async (url, opts={}) => { const r = await fetch(url, opts); if (!r.ok) throw new Error((await r.json().catch(()=>({error:r.statusText}))).error || r.statusText); return r.json(); };
+const api = async (url, opts={}) => { const r = await fetch(url, opts); if (!r.ok) { const error=new Error((await r.json().catch(()=>({error:r.statusText}))).error || r.statusText);error.status=r.status;if(r.status===401&&!url.startsWith('/api/mypak')&&!url.startsWith('/api/mps'))showAuthGate({configured:true,signedIn:false,authenticated:false,role:'none'});throw error;} return r.json(); };
 async function checkForAppUpdate(){
   try {
     const response = await fetch(`/api/build?t=${Date.now()}`, { cache:'no-store' });
@@ -26,6 +28,39 @@ async function checkForAppUpdate(){
       window.location.replace(target.toString());
     }
   } catch (_) {}
+}
+
+function showAuthGate(status=AUTH_STATE||{}){
+  AUTH_STATE=status;
+  const authorised=Boolean(status.authenticated);
+  $$('.auth-protected').forEach(element=>element.classList.toggle('hidden',!authorised));
+  $('#authGate').classList.toggle('hidden',authorised);
+  if(authorised){$('#signedInAccount').innerHTML=`<span>Signed in & sending as</span><b>${esc(status.email)}</b>`;return;}
+  const signIn=$('#googleSignIn'),signOut=$('#authSignOut'),transfer=$('#authTransferState');
+  signIn.href='/api/auth/google';
+  signIn.textContent=status.ownerSetupReady?'Secure workspace with Google':'Continue with Google';
+  signIn.classList.toggle('hidden',status.role==='transfer_pending'||(!status.configured&&!status.ownerSetupReady));
+  signOut.classList.toggle('hidden',!status.signedIn);
+  transfer.classList.add('hidden');
+  if(status.ownerSetupReady){$('#authTitle').textContent='Secure your existing pharmacy workspace';$('#authMessage').textContent='Choose the Google account that will own the existing patient data and send pharmacy email. This one-time setup does not delete or move any records.';return;}
+  if(!status.configured){$('#authTitle').textContent='Secure setup link required';$('#authMessage').textContent='Open the private one-time workspace setup link supplied after deployment.';return;}
+  if(status.role==='transfer_pending'){$('#authTitle').textContent='New account verified';$('#authMessage').textContent='This account still cannot see patient data. The current owner must complete the workspace transfer first.';transfer.textContent=`Verified account: ${status.email}`;transfer.classList.remove('hidden');return;}
+  $('#authTitle').textContent='Sign in to your pharmacy workspace';
+  $('#authMessage').textContent='The Google account you sign in with is also the protected Gmail sender for prescription and pharmacy emails.';
+}
+async function acceptWorkspaceSetupLink(){
+  const token=new URLSearchParams(location.hash.replace(/^#/, '')).get('workspaceSetup');
+  if(!token)return;
+  history.replaceState(null,'',`${location.pathname}${location.search}`);
+  const response=await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});
+  if(!response.ok)throw new Error((await response.json().catch(()=>({error:'Secure workspace setup failed.'}))).error);
+}
+async function loadAuthStatus(){
+  try{await acceptWorkspaceSetupLink();AUTH_STATE=await fetch('/api/auth/status',{cache:'no-store'}).then(response=>response.json());showAuthGate(AUTH_STATE);return Boolean(AUTH_STATE.authenticated);}
+  catch(error){showAuthGate({configured:false,signedIn:false,authenticated:false});$('#authMessage').textContent=error.message;return false;}
+}
+async function workspaceSignOut(){
+  try{await fetch('/api/auth/logout',{method:'POST'});}finally{STATE=null;AUTH_STATE={...(AUTH_STATE||{}),signedIn:false,authenticated:false,role:'none',email:''};showAuthGate(AUTH_STATE);}
 }
 
 function statusClass(p){
@@ -107,30 +142,52 @@ function renderImportReview(){
 async function refreshMyPakStatus(){
   try {
     const [connection, sync] = await Promise.all([api('/api/mypak/status'), api('/api/mypak/sync/status')]);
-    $('#mypakConnection').textContent = !connection.configured ? 'Not configured' : connection.authenticated ? 'Connected' : connection.lastError ? 'Authentication/request failed' : 'Configured';
+    MYPAK_CONNECTION = connection;
+    const connected = Boolean(connection.connected);
+    const connectionLabel = connected ? 'Connected to MyPak' : connection.hasSavedData ? 'Disconnected · saved data available' : 'Disconnected';
+    $$('.mypak-connection').forEach(element=>{
+      element.textContent = connectionLabel;
+      element.classList.toggle('connected', connected);
+      element.classList.toggle('disconnected', !connected);
+    });
     const when = connection.lastSyncAt ? new Date(connection.lastSyncAt).toLocaleString() : 'never';
-    const progress = sync.running ? ` · syncing clinical data… ${sync.progress}%` : '';
-    const error = connection.lastError || sync.lastError;
-    $('#mypakSyncSummary').textContent = `Last sync: ${when} · Patients: ${connection.patientCount || 0}${progress}${error ? ` · Error: ${error}` : ''}`;
-    $('#mypakSyncBtn').disabled = !connection.configured || sync.running;
-  } catch (error) { $('#mypakConnection').textContent = 'Status unavailable'; $('#mypakSyncSummary').textContent = error.message; }
+    const progress = sync.running ? ` · Full sync running… ${sync.progress || 0}%` : '';
+    const error = connected || sync.running ? (connection.lastError || sync.lastError) : '';
+    const summary = `Last sync: ${when} · Patients: ${connection.patientCount || 0} · Medication balances: ${connection.medicationBalanceCount || 0} · Prescriptions: ${connection.prescriptionCount || 0} · Doctors: ${connection.doctorCount || 0} · Dispense history: ${connection.dispenseHistoryCount || 0} · Pack jobs: ${connection.packJobCount || 0}${progress}${error ? ` · Error: ${error}` : ''}`;
+    $$('.mypak-sync-summary').forEach(element=>{ element.textContent = summary; });
+    $$('.mypak-login-form').forEach(form=>{
+      form.querySelectorAll('input,button[type="submit"]').forEach(control=>{ control.disabled = connected || sync.running; });
+    });
+    $$('.mypak-disconnect-btn').forEach(button=>{ button.disabled = !connected || sync.running; });
+    [$('#mypakSyncBtn'), $('#mypakSyncBtnSettings')].filter(Boolean).forEach(button=>{ button.disabled = !connected || sync.running; });
+    return { connection, sync };
+  } catch (error) {
+    MYPAK_CONNECTION = null;
+    $$('.mypak-connection').forEach(element=>{ element.textContent = 'Status unavailable'; element.classList.remove('connected'); });
+    $$('.mypak-sync-summary').forEach(element=>{ element.textContent = error.message; });
+    return null;
+  }
 }
 async function syncMyPakPatients({silent=false}={}){
-  const buttons = [$('#mypakSyncBtn'), $('#mypakSyncBtnSettings'), $('#refreshBtn')].filter(Boolean);
+  if(!MYPAK_CONNECTION?.connected){
+    const status = await refreshMyPakStatus();
+    if(!status?.connection?.connected){ if(!silent) toast('Connect your MyPak account first.'); return; }
+  }
+  const buttons = [$('#mypakSyncBtn'), $('#mypakSyncBtnSettings')].filter(Boolean);
   const refreshButton = $('#refreshBtn');
   buttons.forEach(button=>button.disabled=true);
   if(refreshButton){refreshButton.dataset.label=refreshButton.textContent;refreshButton.textContent='Refreshing MyPak…';}
   const poll = setInterval(refreshMyPakStatus, 750);
   try {
-    const result = await api('/api/mypak/sync/patients', { method: 'POST' });
+    const result = await api('/api/mypak/sync/all', { method: 'POST' });
     if(result.started===false){
-      for(let attempt=0;attempt<120;attempt++){
+      for(let attempt=0;attempt<600;attempt++){
         const status=await api('/api/mypak/sync/status');
         if(!status.running) break;
-        await new Promise(resolve=>setTimeout(resolve,500));
+        await new Promise(resolve=>setTimeout(resolve,1000));
       }
     }
-    if(!silent) toast('Live MyPak balances refreshed.');
+    if(!silent) toast('Complete MyPak data refreshed.');
     await loadState();
   }
   catch (error) { toast(error.message); }
@@ -140,6 +197,48 @@ async function syncMyPakPatients({silent=false}={}){
     if(refreshButton) refreshButton.textContent=refreshButton.dataset.label||'Refresh';
     await refreshMyPakStatus();
   }
+}
+async function connectMyPak(event){
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('button[type="submit"]');
+  const credentials = Object.fromEntries(new FormData(form).entries());
+  $$('.mypak-login-form button').forEach(button=>{ button.disabled = true; });
+  submit.textContent = 'Connecting…';
+  try {
+    await api('/api/mypak/session', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ username:credentials.username, password:credentials.password }) });
+    $$('.mypak-login-form').forEach(accountForm=>accountForm.reset());
+    let completed = false;
+    for(let attempt=0;attempt<600;attempt++){
+      const status = await api('/api/mypak/sync/status');
+      await refreshMyPakStatus();
+      if(!status.running){
+        if(status.lastError) throw new Error(status.lastError);
+        completed = true;
+        break;
+      }
+      await new Promise(resolve=>setTimeout(resolve,1000));
+    }
+    await loadState();
+    toast(completed ? 'MyPak connected and full sync completed.' : 'MyPak connected. Full sync is still running in the background.');
+  } catch(error) {
+    $$('.mypak-login-form input[name="password"]').forEach(input=>{ input.value=''; });
+    toast(error.message);
+  } finally {
+    submit.textContent = 'Connect & full sync';
+    await refreshMyPakStatus();
+  }
+}
+async function disconnectMyPak(){
+  if(!confirm('Disconnect the live MyPak login? All data already synced will be preserved.')) return;
+  $$('.mypak-disconnect-btn').forEach(button=>{ button.disabled=true; });
+  try {
+    await api('/api/mypak/disconnect', { method:'POST' });
+    $$('.mypak-login-form').forEach(form=>form.reset());
+    toast('MyPak disconnected. Previously synced data was preserved.');
+    await loadState();
+  } catch(error) { toast(error.message); }
+  finally { await refreshMyPakStatus(); }
 }
 async function refreshMpsStatus(){
   try {
@@ -814,14 +913,42 @@ function renderSettings(){
   $('#auditLog').innerHTML=(STATE.auditLog||[]).length?`<table><thead><tr><th>Time</th><th>Action</th><th>Details</th></tr></thead><tbody>${STATE.auditLog.slice(0,200).map(a=>`<tr><td>${esc((a.at||'').slice(0,19).replace('T',' '))}</td><td>${esc(a.action)}</td><td><code>${esc(JSON.stringify(a.details||{}))}</code></td></tr>`).join('')}</tbody></table>`:empty('No audit log yet.');
   refreshGmailStatus();
 }
+function renderWorkspaceTransfer(){
+  const transfer=AUTH_STATE?.transfer||null;const owner=AUTH_STATE?.email||'';
+  $('#workspaceOwnerEmail').textContent=owner||'—';$('#transferCurrentEmail').value=owner;
+  $('#workspaceTransferBadge').textContent=transfer?(transfer.verified?'New account verified':'Waiting for verification'):'No transfer pending';
+  $('#workspaceTransferBadge').className=transfer?(transfer.verified?'gmail-connected':'gmail-not-connected'):'';
+  $('#transferTargetEmail').value=transfer?.targetEmail||'';$('#transferTargetEmail').disabled=Boolean(transfer);
+  $('#workspaceTransferForm').querySelector('button').disabled=Boolean(transfer);
+  $('#completeWorkspaceTransfer').disabled=!transfer?.verified||transfer?.expired;
+  $('#cancelWorkspaceTransfer').disabled=!transfer;
+  const status=$('#workspaceTransferStatus');
+  if(!transfer){status.textContent='The new account will see no patient information until it verifies the invitation and you complete the transfer.';status.className='workspace-transfer-status';return;}
+  if(transfer.expired){status.textContent=`The invitation for ${transfer.targetEmail} expired. Cancel it and create a new transfer.`;status.className='workspace-transfer-status error';return;}
+  status.textContent=transfer.verified?`${transfer.targetEmail} is verified. Complete transfer to move all patient data and Gmail sending ownership.`:`Verification email sent to ${transfer.targetEmail}. Patient data remains hidden until that account verifies.`;
+  status.className=`workspace-transfer-status ${transfer.verified?'ready':'warning'}`;
+}
 async function refreshGmailStatus(){
-  try{const status=await api('/api/gmail/status');const label=$('#gmailStatus');const connect=$('#gmailConnect');label.textContent=status.connected?`Connected sender · ${status.emailAddress||'Google account'}`:status.configured?'Ready to connect a Google account':'Google OAuth server credentials required';label.className=status.connected?'gmail-connected':'gmail-not-connected';connect.textContent=status.connected?'Change Google account':'Connect Google account';connect.style.pointerEvents=status.configured?'':'none';connect.style.opacity=status.configured?'1':'.45';$('#gmailTest').disabled=!status.connected;$('#gmailRunNow').disabled=!status.connected;$('#gmailDisconnect').disabled=!status.connected;$('#gmailSetupHelp').textContent=status.configured?(status.connected?'Choose “Change Google account” to use another sender now or transfer sending to the pharmacy account later. The pharmacy recipient above remains separate.':`Google will ask which account to use. You can connect another approved account now and change it to the pharmacy account later. Redirect URI: ${status.redirectUri}`):`To activate the login button, add GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and GMAIL_TOKEN_KEY on the server. Redirect URI: ${status.redirectUri}`;}
+  try{AUTH_STATE=await api('/api/auth/status');const status=await api('/api/gmail/status');const label=$('#gmailStatus');label.textContent=status.connected?`Signed in & sending as ${status.emailAddress}`:'Sign in again to restore Gmail sending';label.className=status.connected?'gmail-connected':'gmail-not-connected';$('#gmailTest').disabled=!status.connected;$('#gmailRunNow').disabled=!status.connected;$('#gmailSetupHelp').textContent=status.connected?'All outgoing Gmail is sent from this signed-in account.':'Workspace data is available, but Gmail sending needs the owner to sign in again.';renderWorkspaceTransfer();}
   catch(error){$('#gmailStatus').textContent=error.message;}
 }
 async function emailSettingsSubmit(event){event.preventDefault();try{await api('/api/email-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pharmacyEmail:$('#pharmacyEmail').value})});await loadState();showView('settings');toast('Pharmacy email saved.');}catch(error){toast(error.message);}}
 async function gmailTest(){try{await api('/api/gmail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('#pharmacyEmail').value})});toast('Test email sent.');}catch(error){toast(error.message);}}
-async function gmailDisconnect(){if(!window.confirm('Disconnect the Gmail sender? Automatic schedules will pause until Gmail is reconnected.'))return;await api('/api/gmail/disconnect',{method:'POST'});await refreshGmailStatus();toast('Gmail disconnected.');}
 async function runSpecialEmailScheduler(){try{const result=await api('/api/special-orders/run-email-scheduler',{method:'POST'});await loadState();showView('settings');toast(result.skipped?`Scheduler paused: ${result.reason}`:`Due emails complete: ${result.sent} sent · ${result.failed} failed.`);}catch(error){toast(error.message);}}
+async function startWorkspaceTransfer(event){
+  event.preventDefault();const targetEmail=$('#transferTargetEmail').value.trim();if(!targetEmail)return;
+  const button=event.currentTarget.querySelector('button');button.disabled=true;button.textContent='Sending verification…';
+  try{await api('/api/workspace/transfer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetEmail})});await refreshGmailStatus();toast(`Verification sent to ${targetEmail}.`);}catch(error){toast(error.message);}finally{button.textContent='Email verification link';button.disabled=Boolean(AUTH_STATE?.transfer);}
+}
+async function completeWorkspaceTransfer(){
+  const transfer=AUTH_STATE?.transfer;if(!transfer?.verified)return;
+  if(!window.confirm(`Transfer the complete pharmacy workspace and Gmail sender from ${AUTH_STATE.email} to ${transfer.targetEmail}? Your current account will immediately lose patient-data access.`))return;
+  try{await api('/api/workspace/transfer/complete',{method:'POST'});toast('Workspace ownership and Gmail sender transferred.');await loadAuthStatus();}catch(error){toast(error.message);}
+}
+async function cancelWorkspaceTransfer(){
+  if(!AUTH_STATE?.transfer||!window.confirm(`Cancel the transfer to ${AUTH_STATE.transfer.targetEmail}?`))return;
+  try{await api('/api/workspace/transfer',{method:'DELETE'});await refreshGmailStatus();toast('Workspace transfer cancelled.');}catch(error){toast(error.message);}
+}
 function showView(id){
   $$('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===id));
   $$('.view').forEach(v=>v.classList.toggle('active',v.id===id));
@@ -882,9 +1009,16 @@ $('#mobileMenuToggle').addEventListener('click',toggleMobileMenu);
 $('#mobileMenuBackdrop').addEventListener('click',closeMobileMenu);
 $('#globalPatientSearchForm').addEventListener('submit',globalPatientSearch);
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileMenu();});
-$('#refreshBtn').addEventListener('click',()=>syncMyPakPatients());
+$('#refreshBtn').addEventListener('click',async()=>{
+  const status = await refreshMyPakStatus();
+  if(status?.connection?.connected) return syncMyPakPatients();
+  await loadState();
+  toast('Saved data refreshed. Connect MyPak to download new live data.');
+});
 $('#mypakSyncBtn').addEventListener('click',syncMyPakPatients);
 $('#mypakSyncBtnSettings').addEventListener('click',syncMyPakPatients);
+$$('.mypak-login-form').forEach(form=>form.addEventListener('submit',connectMyPak));
+$$('.mypak-disconnect-btn').forEach(button=>button.addEventListener('click',disconnectMyPak));
 $('#mpsTokenForm').addEventListener('submit',connectMps);
 $('#mpsPatientSyncBtn').addEventListener('click',syncMpsPatients);
 $('#mpsMedicationSyncBtn').addEventListener('click',syncMpsMedications);
@@ -907,11 +1041,18 @@ $('#specialOrderForm').addEventListener('submit',specialOrderSubmit);
 $('#specialSearch').addEventListener('input',renderSpecialOrders); $('#specialFilter').addEventListener('change',renderSpecialOrders);
 $('#specialTickDue').addEventListener('click',()=>setSpecialChecks('due')); $('#specialUntick').addEventListener('click',()=>setSpecialChecks('none')); $('#generateSpecialPdf').addEventListener('click',generateSpecialPdf);
 $('#settingsForm').addEventListener('submit',settingsSubmit);
-$('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailDisconnect').addEventListener('click',gmailDisconnect);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
+$('#emailSettingsForm').addEventListener('submit',emailSettingsSubmit);$('#gmailTest').addEventListener('click',gmailTest);$('#gmailRunNow').addEventListener('click',runSpecialEmailScheduler);
+$('#workspaceTransferForm').addEventListener('submit',startWorkspaceTransfer);$('#completeWorkspaceTransfer').addEventListener('click',completeWorkspaceTransfer);$('#cancelWorkspaceTransfer').addEventListener('click',cancelWorkspaceTransfer);
+$('#workspaceSignOut').addEventListener('click',workspaceSignOut);$('#authSignOut').addEventListener('click',workspaceSignOut);
 window.openPatient=openPatient; window.editPatient=editPatient; window.openDispensePatient=openDispensePatient; window.setDispenseStatus=setDispenseStatus; window.deleteScriptRequest=deleteScriptRequest; window.printScriptRequest=printScriptRequest; window.setScriptRequestStatus=setScriptRequestStatus; window.buildRequestForPatient=buildRequestForPatient; window.renderRequestItems=renderRequestItems; window.tickAllRequestItems=tickAllRequestItems; window.requestItemToggled=requestItemToggled; window.requestStatusChanged=requestStatusChanged; window.requestRepeatChanged=requestRepeatChanged; window.createScriptRequest=createScriptRequest; window.markDoctor=markDoctor; window.editSpecialOrder=editSpecialOrder; window.addLiveS8Special=addLiveS8Special; window.quickSpecialStatus=quickSpecialStatus; window.openDoctorAnalysis=openDoctorAnalysis; window.saveDoctorAnalysis=saveDoctorAnalysis; window.selectDoctorPatient=selectDoctorPatient; window.clearDoctorPatient=clearDoctorPatient;
 window.saveRepeatOverride=saveRepeatOverride; window.clearRepeatOverride=clearRepeatOverride; window.adjustRepeatOverride=adjustRepeatOverride; window.buildSmartRequestForPatient=buildSmartRequestForPatient; window.selectSmartPatient=selectSmartPatient; window.runSmartAiReview=runSmartAiReview;
 window.addEventListener('focus', checkForAppUpdate);
 document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) checkForAppUpdate(); });
 setInterval(checkForAppUpdate, 60000);
 checkForAppUpdate();
-loadState().then(async()=>{if(new URLSearchParams(location.search).has('gmail')){showView('settings');toast(new URLSearchParams(location.search).get('gmail')==='connected'?'Gmail connected successfully.':'Gmail connection was not approved.');}await Promise.all([refreshMyPakStatus(),refreshMpsStatus(),refreshSmartAiStatus()]);await syncMyPakPatients({silent:true});}).catch(e=>toast(e.message));
+async function bootstrapApp(){
+  if(!await loadAuthStatus())return;
+  try{await loadState();const authResult=new URLSearchParams(location.search).get('auth');if(authResult==='signed-in')toast('Signed in. Gmail sending uses this Google account.');if(authResult==='owner-created')toast('Workspace secured. This Google account now owns the existing patient data and sends Gmail.');await Promise.all([refreshMyPakStatus(),refreshMpsStatus(),refreshSmartAiStatus()]);}
+  catch(error){toast(error.message);}
+}
+bootstrapApp();

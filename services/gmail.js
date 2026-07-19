@@ -103,7 +103,7 @@ export class GmailService {
     return data;
   }
 
-  async exchangeCode(code) {
+  async exchangeCode(code, { persist = true } = {}) {
     const data = await this.tokenRequest({ code, client_id: this.clientId, client_secret: this.clientSecret, redirect_uri: this.redirectUri, grant_type: 'authorization_code' });
     if (!data.refresh_token) throw new Error('Google did not return an offline refresh token. Reconnect and approve access again.');
     if (!data.access_token) throw new Error('Google did not return an access token. Please reconnect.');
@@ -111,7 +111,7 @@ export class GmailService {
     const emailAddress = clean(profile.email || profile.emailAddress);
     if (!validEmail(emailAddress)) throw new Error('Google account email could not be verified. Please choose another account.');
     const tokens = { accessToken: data.access_token, refreshToken: data.refresh_token, expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000, emailAddress };
-    this.writeTokens(tokens);
+    if (persist) this.writeTokens(tokens);
     return tokens;
   }
 

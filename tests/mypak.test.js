@@ -40,6 +40,26 @@ test('username login is kept server-side and supplies the returned token', async
   assert.equal(requests[1].options.headers.authorization, 'fresh-token');
 });
 
+test('runtime MyPak credentials connect and disconnect without exposing the password', async () => {
+  const requests = [];
+  const client = new MyPakClient({ env: {}, retries: 0, fetchImpl: async (url, options) => {
+    requests.push({ url, options });
+    return url.endsWith('/token')
+      ? response(200, { token: 'runtime-token', refreshToken: 'runtime-refresh' })
+      : response(200, { isSuccess: true, data: [] });
+  } });
+  client.configureCredentials('pharmacy-user', 'private-password');
+  await client.reportOptions();
+  assert.equal(client.isConfigured(), true);
+  assert.deepEqual(JSON.parse(requests[0].options.body), { username: 'pharmacy-user', password: 'private-password' });
+  assert.equal(requests[1].options.headers.authorization, 'runtime-token');
+  client.disconnect();
+  assert.equal(client.isConfigured(), false);
+  await assert.rejects(client.reportOptions(), /disconnected/);
+  assert.equal(requests.length, 2);
+  assert.equal(JSON.stringify(client).includes('private-password'), false);
+});
+
 test('expired token automatically logs in again when credentials are configured', async () => {
   const requests = [];
   const client = new MyPakClient({ env: { MYPAK_AUTHORIZATION: 'expired', MYPAK_USERNAME: 'user', MYPAK_PASSWORD: 'pass' }, retries: 1, fetchImpl: async (url, options) => { requests.push({ url, options }); if (url.endsWith('/token')) return response(200, { token: 'fresh', refreshToken: 'refresh' }); if (options.headers.authorization === 'expired') return response(401, {}); return response(200, { isSuccess: true, data: [], total: 0 }); } });
@@ -114,13 +134,50 @@ test('pagination is sequential across patient and pill balance pages', async () 
   let active = 0; let maxActive = 0; const pages = [];
   const client = { listPatients: async body => { active++; maxActive = Math.max(maxActive, active); pages.push(body.pageIndex); const data = body.pageIndex === 1 ? [row({ patientId: 1 })] : [row({ patientId: 2, externalPatientId: 'EXT-2', firstName: 'John', lastName: 'Second' })]; active--; return { data, total: 2 }; }, listVirtualPillBalances: async () => ({ data: [{ vpBalanceId:'b1', patientId: '1', medication: 'Example', balanceQty: 10 }], total: 1 }), listQuickDispense: async () => ({ data:[{ prescriptionId:'rx1',patientId:'1',medication:'Example',balanceQty:-2 }],total:1 }), listInsufficientPillBalances:async()=>({data:[{prescriptionId:'rx1',isInsufficientPillBalance:true}]}), listDoctors:async()=>({data:[{doctorId:'d1'}]}), listDispenseTracking:async()=>({data:[{scriptTrackingId:'t1',patientId:'1',drugName:'Example'}],total:1}), packJobSummary:async()=>({data:{printingCount:1,checkingCount:1}}) };
   let saved; const service = new MyPakSyncService({ client, readStore: () => store([]), writeStore: value => { saved = value; }, pageSize: 1 });
-  const result = await service.syncPatients(); assert.deepEqual(pages, [1, 2]); assert.equal(maxActive, 1); assert.equal(result.status.recordsProcessed, 2); assert.equal(saved.patients.length, 2); assert.equal(saved.mypakMedicationBalances.length, 1); assert.equal(saved.mypakPrescriptions.length,1); assert.equal(saved.mypakDoctors.length,1);
+  const result = await service.syncPatients(); assert.deepEqual(pages, [1, 2]); assert.equal(maxActive, 1); assert.equal(result.status.recordsProcessed, 2); assert.equal(saved.patients.length, 2); assert.equal(saved.mypakMedicationBalances.length, 1); assert.equal(saved.mypakPrescriptions.length,2); assert.equal(saved.mypakDoctors.length,1);
 });
 
 test('sync cannot start twice', async () => {
   let release; const gate = new Promise(resolve => { release = resolve; });
   const service = new MyPakSyncService({ client: { listPatients: async () => { await gate; return { data: [], total: 0 }; }, listVirtualPillBalances: async () => ({ data: [], total: 0 }), listQuickDispense:async()=>({data:[],total:0}),listInsufficientPillBalances:async()=>({data:[]}),listDoctors:async()=>({data:[]}),listDispenseTracking:async()=>({data:[],total:0}),packJobSummary:async()=>({data:{}}) }, readStore: () => store([]), writeStore: () => {} });
   const first = service.syncPatients(); const second = await service.syncPatients(); assert.equal(second.started, false); release(); await first;
+});
+
+test('full sync downloads patients, clinical data, groups and all pack jobs', async () => {
+  const calls = { reportOptions: 0, groupIds: [], packPages: [] };
+  const client = {
+    listPatients: async () => ({ data: [row({ patientGroupId: 'group-1' })], total: 1 }),
+    listVirtualPillBalances: async () => ({ data: [{ vpBalanceId: 'balance-1', patientId: '10', medication: 'Example', balanceQty: 8 }], total: 1 }),
+    listQuickDispense: async () => ({ data: [], total: 0 }),
+    listInsufficientPillBalances: async () => ({ data: [] }),
+    listDoctors: async () => ({ data: [{ doctorId: 'doctor-1' }] }),
+    listDispenseTracking: async () => ({ data: [{ scriptTrackingId: 'tracking-1', patientId: '10' }], total: 1 }),
+    packJobSummary: async () => ({ data: { completeCount: 2 } }),
+    reportOptions: async () => { calls.reportOptions++; return { data: { available: true } }; },
+    patientGroup: async groupId => { calls.groupIds.push(groupId); return { data: { patientGroupId: groupId } }; },
+    listPackJobs: async body => {
+      calls.packPages.push(body.pageIndex);
+      return body.pageIndex === 1
+        ? { data: [{ jobId: 'job-1', patientId: '10', status: '6' }, { jobId: 'job-2', patientId: '10', status: '3' }], total: 3 }
+        : { data: [{ jobId: 'job-3', patientId: '10', status: '1' }], total: 3 };
+    }
+  };
+  let saved;
+  const service = new MyPakSyncService({ client, readStore: () => saved || store([]), writeStore: value => { saved = value; }, pageSize: 2 });
+  const result = await service.syncAll();
+  assert.equal(result.fullSync, true);
+  assert.equal(result.packJobs, 3);
+  assert.equal(calls.reportOptions, 1);
+  assert.deepEqual(calls.groupIds, ['group-1']);
+  assert.deepEqual(calls.packPages, [1, 2]);
+  assert.equal(saved.patients.length, 1);
+  assert.equal(saved.mypakMedicationBalances.length, 1);
+  assert.equal(saved.mypakDoctors.length, 1);
+  assert.equal(saved.mypakDispenseHistory.length, 1);
+  assert.equal(saved.mypakGroups.length, 1);
+  assert.equal(saved.mypakPackJobs.length, 3);
+  assert.equal(saved.mypakSync.totalPackJobs, 3);
+  assert.ok(saved.mypakSync.fullSyncAt);
 });
 
 test('pack jobs merge by job id instead of duplicating each sync', () => {

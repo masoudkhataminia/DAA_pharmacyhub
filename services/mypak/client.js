@@ -12,6 +12,8 @@ export class MyPakClient {
     this.lastSuccessfulRequestAt = null;
   }
   isConfigured() { return this.auth.isConfigured(); }
+  configureCredentials(username, password) { this.auth.configureCredentials(username, password); this.lastSuccessfulRequestAt = null; }
+  disconnect() { this.auth.clear(); this.lastSuccessfulRequestAt = null; }
   async request(name, { params, body, query } = {}) {
     const endpoint = MYPAK_ENDPOINTS[name];
     const path = endpointPath(name, params);

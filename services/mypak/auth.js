@@ -8,9 +8,36 @@ export class MyPakAuth {
     this.token = '';
     this.refreshToken = '';
     this.staticTokenRejected = false;
+    Object.defineProperty(this, 'runtimeUsername', { value: '', writable: true, enumerable: false });
+    Object.defineProperty(this, 'runtimePassword', { value: '', writable: true, enumerable: false });
+    this.disconnected = false;
   }
-  hasCredentials() { return Boolean(this.env.MYPAK_USERNAME && this.env.MYPAK_PASSWORD); }
-  isConfigured() { return Boolean(this.env.MYPAK_AUTHORIZATION || this.hasCredentials()); }
+  configureCredentials(username, password) {
+    const cleanUsername = String(username || '').trim();
+    const cleanPassword = String(password || '');
+    if (!cleanUsername || !cleanPassword) throw new MyPakError('MyPak username and password are required', { status: 400 });
+    if (cleanUsername.length > 320 || cleanPassword.length > 1024) throw new MyPakError('MyPak credentials are too long', { status: 400 });
+    this.runtimeUsername = cleanUsername;
+    this.runtimePassword = cleanPassword;
+    this.token = '';
+    this.refreshToken = '';
+    this.staticTokenRejected = true;
+    this.disconnected = false;
+  }
+  clear() {
+    this.runtimeUsername = '';
+    this.runtimePassword = '';
+    this.token = '';
+    this.refreshToken = '';
+    this.staticTokenRejected = true;
+    this.disconnected = true;
+  }
+  credentials() {
+    if (this.runtimeUsername && this.runtimePassword) return { username: this.runtimeUsername, password: this.runtimePassword };
+    return { username: this.env.MYPAK_USERNAME, password: this.env.MYPAK_PASSWORD };
+  }
+  hasCredentials() { const credentials = this.credentials(); return !this.disconnected && Boolean(credentials.username && credentials.password); }
+  isConfigured() { return !this.disconnected && Boolean((this.env.MYPAK_AUTHORIZATION && !this.staticTokenRejected) || this.hasCredentials()); }
   canRefresh() { return Boolean(this.refreshToken || this.hasCredentials()); }
   async post(path, body) {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -26,7 +53,7 @@ export class MyPakAuth {
   }
   async login() {
     if (!this.hasCredentials()) throw new MyPakError('MyPak login credentials are not configured', { status: 503, code: 'NOT_CONFIGURED' });
-    return this.post('/token', { username: this.env.MYPAK_USERNAME, password: this.env.MYPAK_PASSWORD });
+    return this.post('/token', this.credentials());
   }
   async refresh() {
     this.staticTokenRejected = true;
@@ -37,6 +64,7 @@ export class MyPakAuth {
     return this.login();
   }
   async authorization() {
+    if (this.disconnected) throw new MyPakError('MyPak is disconnected', { status: 503, code: 'NOT_CONFIGURED' });
     if (this.token) return this.token;
     if (this.env.MYPAK_AUTHORIZATION && !this.staticTokenRejected) return this.env.MYPAK_AUTHORIZATION;
     if (this.hasCredentials()) return this.login();

@@ -1,12 +1,12 @@
 # Private MyPak connector
 
-The connector runs only in the Express backend. MyPak credentials are read from the server environment and are never returned to the browser, stored in `store.json`, or written to the audit log.
+The connector runs only in the Express backend. Staff enter the same username and password used on the MyPak website through the protected DAA interface. Credentials are sent only to the backend, kept in memory for the current server session, and never returned to the browser, stored in `store.json`, or written to the audit log.
 
 ## Configuration
 
-Set `MYPAK_USERNAME` and `MYPAK_PASSWORD` in the private server environment for automatic login and token refresh. A temporary `MYPAK_AUTHORIZATION` token is also supported; when both are present, an expired token falls back to the configured credentials. `MYPAK_BASE_URL` defaults to `https://api.mypak.app/api`. Set `MYPAK_SYNC_INTERVAL_MINUTES` to a positive number to enable periodic patient and medication-balance sync; empty or `0` disables it. The automatic window defaults to 08:00–18:00 in `Australia/Darwin` and can be configured with `MYPAK_SYNC_START_HOUR`, `MYPAK_SYNC_END_HOUR`, and `MYPAK_SYNC_TIME_ZONE`.
+`MYPAK_BASE_URL` defaults to `https://api.mypak.app/api`. The portal intentionally ignores environment-based MyPak usernames, passwords, and tokens so a live account must be explicitly connected in the UI after a server restart. Set `MYPAK_SYNC_INTERVAL_MINUTES` to a positive number to enable periodic refresh while that in-memory account remains connected; empty or `0` disables it. The automatic window defaults to 08:00–18:00 in `Australia/Darwin` and can be configured with `MYPAK_SYNC_START_HOUR`, `MYPAK_SYNC_END_HOUR`, and `MYPAK_SYNC_TIME_ZONE`.
 
-Credentials remain only in the server environment. The connector uses the confirmed MyPak `/token` login and `/token/refreshtoken` renewal endpoints and never returns credentials or tokens to the browser.
+The connector uses the confirmed MyPak `/token` login and `/token/refreshtoken` renewal endpoints. Disconnect clears the username, password, access token, and refresh token from backend memory without deleting already synced patient data.
 The production `npm start` command loads the private `.env` file with Node's built-in `--env-file` support; `.env` remains excluded from Git.
 
 Never commit credentials, cookies, patient exports, `data/store.json`, or captured live responses.
@@ -27,9 +27,9 @@ The allowlisted registry is in `services/mypak/endpoints.js`; `config/mypak-endp
 
 ## Operation
 
-Test the connection with `POST /api/mypak/test`. Start a full patient sync with `POST /api/mypak/sync/patients`; `POST /api/mypak/sync/all` additionally caches confirmed report options and each group referenced by the synced patients. Monitor with `GET /api/mypak/sync/status`. The Import Centre provides the patient sync control and reloads `/api/state` after success.
+Connect and start a complete sync with `POST /api/mypak/session`; disconnect with `POST /api/mypak/disconnect`. A manual `POST /api/mypak/sync/all` refreshes patients, virtual pill balances, prescriptions, doctors, 90-day dispense history, report options, referenced patient groups, the pack summary, and one year of pack jobs. Monitor with `GET /api/mypak/sync/status`. The Import Centre and Settings screens provide the same login, Full Sync, and Disconnect controls.
 
-Patient pages are requested sequentially. Large balance and dispense datasets use bounded four-request batches, a 200-record page size, and explicit page limits. The main refresh reads the lightweight 120-day pack summary; the selected patient's one-year pack history is then fetched live on demand and merged by immutable `jobId`, so status/ownership is updated instead of duplicated. Exact dose allocations are fetched only for that patient's relevant packs and cached locally. No MyPak complete, confirm, reject, reverse, delete, or edit endpoint is allowlisted.
+Patient pages are requested sequentially. Large balance, dispense, and pack-job datasets use bounded four-request batches, a 200-record page size, and explicit page limits. Pack jobs are merged by immutable `jobId`, so status and ownership update instead of duplicating records. Exact dose allocations are fetched only for a selected patient's relevant packs and cached locally. No MyPak complete, confirm, reject, reverse, delete, or edit endpoint is allowlisted.
 
 Temporary 429, 5xx, timeout, and network failures receive limited backoff retries. Existing patients are matched by MyPak ID, external ID, name plus DOB, then name-only for review. Uncertain matches and locally cached MyPak patients missing from a later sync are reviewed, never silently merged or deleted.
 
@@ -39,7 +39,7 @@ Set `OPENAI_API_KEY` in the private server environment to enable email/PDF/image
 
 ## Troubleshooting
 
-- `401`: replace an expired/invalid token and restart.
+- `401`: check the MyPak username/password, then reconnect from Import Centre or Settings.
 - `403`: confirm that the authorised MyPak account can view the requested data; do not bypass its permissions.
 - `429`: wait before retrying or increase the periodic interval.
 - `500`/timeout: MyPak may be temporarily unavailable. The existing app continues using its last local data.

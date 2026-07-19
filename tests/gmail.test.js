@@ -70,6 +70,22 @@ test('Gmail connection allows choosing another Google account and requests its e
   fs.rmSync(dir, { recursive:true, force:true });
 });
 
+test('Google sign-in can verify a transfer account without replacing the owner token', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'daa-gmail-verify-'));
+  const tokenFile = path.join(dir, 'owner-token.enc');
+  const service = new GmailService({
+    clientId:'client', clientSecret:'secret', redirectUri:'https://example.com/callback', tokenFile, encryptionKey:'test-key',
+    fetchImpl:async url => url === 'https://oauth2.googleapis.com/token'
+      ? new Response(JSON.stringify({ access_token:'new-access', refresh_token:'new-refresh', expires_in:3600 }), { status:200 })
+      : new Response(JSON.stringify({ email:'new-owner@example.com' }), { status:200 })
+  });
+  service.writeTokens({ refreshToken:'current-owner-refresh', emailAddress:'current-owner@example.com' });
+  const verified = await service.exchangeCode('transfer-code', { persist:false });
+  assert.equal(verified.emailAddress, 'new-owner@example.com');
+  assert.equal(service.readTokens().emailAddress, 'current-owner@example.com');
+  fs.rmSync(dir, { recursive:true, force:true });
+});
+
 test('special queue accepts S8 and explicit special orders only', () => {
   assert.equal(isS8Medication({ schedule:'S8', medicine:'Example' }), true);
   assert.equal(isS8Medication({ medicine:'Vyvanse 30mg' }), true);
